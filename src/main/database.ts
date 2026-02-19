@@ -27,6 +27,7 @@ export function initDatabase(): void {
       workspace_id INTEGER NOT NULL,
       title TEXT NOT NULL,
       model TEXT NOT NULL,
+      session_id TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
@@ -40,7 +41,19 @@ export function initDatabase(): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `)
+
+  // Migration: add session_id column if it doesn't exist (for existing databases)
+  try {
+    db.exec('ALTER TABLE conversations ADD COLUMN session_id TEXT')
+  } catch {
+    // Column already exists
+  }
 }
 
 export function getDatabase(): Database.Database {
@@ -67,6 +80,20 @@ export function deleteWorkspace(id: number): void {
   database.prepare('DELETE FROM workspaces WHERE id = ?').run(id)
 }
 
+export function getConversation(id: number): unknown {
+  const database = getDatabase()
+  return database.prepare('SELECT * FROM conversations WHERE id = ?').get(id)
+}
+
+export function getWorkspaceForConversation(conversationId: number): unknown {
+  const database = getDatabase()
+  return database
+    .prepare(
+      'SELECT w.* FROM workspaces w JOIN conversations c ON c.workspace_id = w.id WHERE c.id = ?'
+    )
+    .get(conversationId)
+}
+
 export function getConversationsByWorkspace(workspaceId: number): unknown[] {
   const database = getDatabase()
   return database
@@ -77,13 +104,14 @@ export function getConversationsByWorkspace(workspaceId: number): unknown[] {
 export function createConversation(
   workspaceId: number,
   title: string,
-  model: string
+  model: string,
+  sessionId?: string
 ): unknown {
   const database = getDatabase()
   const stmt = database.prepare(
-    'INSERT INTO conversations (workspace_id, title, model) VALUES (?, ?, ?)'
+    'INSERT INTO conversations (workspace_id, title, model, session_id) VALUES (?, ?, ?, ?)'
   )
-  const result = stmt.run(workspaceId, title, model)
+  const result = stmt.run(workspaceId, title, model, sessionId || null)
   return database
     .prepare('SELECT * FROM conversations WHERE id = ?')
     .get(result.lastInsertRowid)
@@ -132,4 +160,19 @@ export function addMessage(
     .run(conversationId)
 
   return database.prepare('SELECT * FROM messages WHERE id = ?').get(result.lastInsertRowid)
+}
+
+export function getSetting(key: string, defaultValue?: string): string | null {
+  const database = getDatabase()
+  const row = database.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
+    | { value: string }
+    | undefined
+  return row?.value ?? defaultValue ?? null
+}
+
+export function setSetting(key: string, value: string): void {
+  const database = getDatabase()
+  database
+    .prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?')
+    .run(key, value, value)
 }

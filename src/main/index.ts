@@ -1,12 +1,11 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, BrowserWindow } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { initDatabase } from './database'
 import { initAnthropicClient } from './anthropic'
 import { registerIpcHandlers } from './ipc'
-
-let apiKeyAvailable = false
+import { initLogger, log, getLogPath } from './logger'
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -52,19 +51,21 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
+  // Initialize logger
+  initLogger()
+  log('app', `Log file: ${getLogPath()}`)
+
   // Initialize database
   initDatabase()
+  log('app', 'Database initialized')
 
-  // Initialize Anthropic client
-  apiKeyAvailable = initAnthropicClient()
+  // Initialize Anthropic client (used for title generation)
+  initAnthropicClient()
+  log('app', 'Anthropic client initialized')
 
-  // Register IPC handlers
+  // Register IPC handlers (includes get-api-key-status)
   registerIpcHandlers()
-
-  // Register API key status handler
-  ipcMain.handle('get-api-key-status', () => {
-    return apiKeyAvailable
-  })
+  log('app', 'IPC handlers registered')
 
   createWindow()
 

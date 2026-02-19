@@ -72,21 +72,18 @@ const styles: Record<string, React.CSSProperties> = {
 function ApiKeyMissing(): React.JSX.Element {
   return (
     <div style={styles.container}>
-      <h1 style={styles.heading}>API Key Required</h1>
+      <h1 style={styles.heading}>Claude Code Required</h1>
       <p style={styles.text}>
-        To use Singularity, you need to set the{' '}
-        <span style={styles.code}>ANTHROPIC_API_KEY</span> environment variable with your Anthropic
-        API key.
+        Singularity uses <span style={styles.code}>Claude Code</span> to power conversations.
+        Please install it first.
       </p>
       <div style={styles.box}>
-        <div style={styles.boxLabel}>Add to ~/.zshrc</div>
-        <div style={styles.codeBlock}>
-          {'export ANTHROPIC_API_KEY="sk-ant-...your-key-here"'}
-        </div>
+        <div style={styles.boxLabel}>Install Claude Code</div>
+        <div style={styles.codeBlock}>{'npm install -g @anthropic-ai/claude-code'}</div>
       </div>
       <p style={styles.note}>
-        After adding the key, run <span style={styles.code}>source ~/.zshrc</span> in your terminal
-        and restart Singularity.
+        After installing, make sure you can run <span style={styles.code}>claude --version</span> in
+        your terminal, then restart Singularity.
       </p>
     </div>
   )

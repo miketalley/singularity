@@ -3,13 +3,25 @@ import type { BrowserWindow } from 'electron'
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages'
 
 let client: Anthropic | null = null
+let isOAuthToken = false
 
 export function initAnthropicClient(): boolean {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) {
     return false
   }
-  client = new Anthropic({ apiKey })
+
+  // OAuth tokens (from claude.ai / Claude Code) use Bearer auth with beta header
+  isOAuthToken = apiKey.startsWith('sk-ant-oat')
+  if (isOAuthToken) {
+    client = new Anthropic({
+      authToken: apiKey,
+      apiKey: null,
+      defaultHeaders: { 'anthropic-beta': 'oauth-2025-04-20' }
+    })
+  } else {
+    client = new Anthropic({ apiKey })
+  }
   return true
 }
 
@@ -24,7 +36,8 @@ export async function streamChatResponse(
   messages: MessageParam[],
   model: string,
   conversationId: number,
-  window: BrowserWindow
+  window: BrowserWindow,
+  systemPrompt?: string
 ): Promise<string> {
   const anthropic = getClient()
   let fullResponse = ''
@@ -32,7 +45,8 @@ export async function streamChatResponse(
   const stream = anthropic.messages.stream({
     model,
     max_tokens: 4096,
-    messages
+    messages,
+    ...(systemPrompt ? { system: systemPrompt } : {})
   })
 
   for await (const event of stream) {

@@ -6,14 +6,20 @@ import {
   deleteWorkspace,
   getConversationsByWorkspace,
   createConversation,
+  getConversation,
+  getDatabase,
   updateConversationTitle,
   updateConversationModel,
   deleteConversation,
+  getWorkspaceForConversation,
   getMessagesByConversation,
-  addMessage
+  addMessage,
+  getSetting,
+  setSetting
 } from './database'
-import { streamChatResponse, generateTitle } from './anthropic'
-import type { MessageParam } from '@anthropic-ai/sdk/resources/messages'
+import { generateTitle } from './anthropic'
+import { sendClaudeMessage, generateSessionId, isClaudeAvailable } from './claude-cli'
+import { log } from './logger'
 
 export function registerIpcHandlers(): void {
   // Workspace handlers
@@ -52,7 +58,8 @@ export function registerIpcHandlers(): void {
   })
 
   ipcMain.handle('create-conversation', (_event, workspaceId: number, model: string) => {
-    return createConversation(workspaceId, 'New Conversation', model)
+    const sessionId = generateSessionId()
+    return createConversation(workspaceId, 'New Conversation', model, sessionId)
   })
 
   ipcMain.handle('update-conversation-title', (_event, id: number, title: string) => {
@@ -70,59 +77,110 @@ export function registerIpcHandlers(): void {
     return true
   })
 
+  // Check if Claude CLI is available
+  ipcMain.handle('get-api-key-status', () => {
+    return isClaudeAvailable()
+  })
+
+  // Settings handlers
+  ipcMain.handle('get-setting', (_event, key: string, defaultValue?: string) => {
+    return getSetting(key, defaultValue)
+  })
+
+  ipcMain.handle('set-setting', (_event, key: string, value: string) => {
+    setSetting(key, value)
+    return true
+  })
+
   // Message handlers
   ipcMain.handle('get-messages', (_event, conversationId: number) => {
     return getMessagesByConversation(conversationId)
   })
 
-  ipcMain.handle('send-message', async (event, conversationId: number, content: string, model: string) => {
-    // Save the user message
-    addMessage(conversationId, 'user', content)
+  ipcMain.handle(
+    'send-message',
+    async (event, conversationId: number, content: string, model: string) => {
+      log('ipc', 'send-message', { conversationId, model, contentLength: content.length })
 
-    // Load full message history
-    const messages = getMessagesByConversation(conversationId) as Array<{
-      role: 'user' | 'assistant'
-      content: string
-    }>
+      // Save the user message
+      addMessage(conversationId, 'user', content)
 
-    // Format messages for the Anthropic API
-    const formattedMessages: MessageParam[] = messages.map((msg) => ({
-      role: msg.role,
-      content: msg.content
-    }))
-
-    // Get the BrowserWindow that sent the message
-    const window = BrowserWindow.fromWebContents(event.sender)
-    if (!window) {
-      throw new Error('Could not find browser window')
-    }
-
-    // Stream the response
-    const responseText = await streamChatResponse(
-      formattedMessages,
-      model,
-      conversationId,
-      window
-    )
-
-    // Save the assistant response
-    addMessage(conversationId, 'assistant', responseText)
-
-    // Generate title if this is the first user message in the conversation
-    const userMessages = messages.filter((m) => m.role === 'user')
-    if (userMessages.length === 1) {
-      try {
-        const title = await generateTitle(content)
-        updateConversationTitle(conversationId, title)
-        window.webContents.send('conversation-title-updated', {
-          conversationId,
-          title
-        })
-      } catch {
-        // Title generation is non-critical, don't fail the whole operation
+      // Get the BrowserWindow that sent the message
+      const window = BrowserWindow.fromWebContents(event.sender)
+      if (!window) {
+        throw new Error('Could not find browser window')
       }
-    }
 
-    return responseText
-  })
+      // Look up the conversation's session_id and workspace path
+      const conv = getConversation(conversationId) as {
+        title: string
+        session_id: string | null
+      } | undefined
+      if (!conv) {
+        throw new Error('Conversation not found')
+      }
+
+      const workspace = getWorkspaceForConversation(conversationId) as {
+        name: string
+        path: string
+      } | undefined
+      if (!workspace) {
+        throw new Error('Workspace not found for conversation')
+      }
+
+      // Generate session_id if conversation doesn't have one (legacy conversations)
+      let sessionId = conv.session_id
+      if (!sessionId) {
+        sessionId = generateSessionId()
+        const db = getDatabase()
+        db.prepare('UPDATE conversations SET session_id = ? WHERE id = ?').run(
+          sessionId,
+          conversationId
+        )
+      }
+
+      // Determine if this is the first message (no previous assistant messages)
+      const messages = getMessagesByConversation(conversationId) as Array<{
+        role: string
+      }>
+      const hasAssistantMessages = messages.some((m) => m.role === 'assistant')
+      const isFirstMessage = !hasAssistantMessages
+
+      log('ipc', 'Sending via Claude CLI', {
+        sessionId,
+        isFirstMessage,
+        workspacePath: workspace.path
+      })
+
+      // Send via Claude CLI
+      const responseText = await sendClaudeMessage(
+        conversationId,
+        sessionId,
+        content,
+        workspace.path,
+        model,
+        window,
+        isFirstMessage
+      )
+
+      // Save the assistant response
+      addMessage(conversationId, 'assistant', responseText)
+
+      // Generate title if conversation still has the default title
+      if (conv.title === 'New Conversation') {
+        try {
+          const title = await generateTitle(content)
+          updateConversationTitle(conversationId, title)
+          window.webContents.send('conversation-title-updated', {
+            conversationId,
+            title
+          })
+        } catch (err) {
+          console.error('Failed to generate title:', err)
+        }
+      }
+
+      return responseText
+    }
+  )
 }

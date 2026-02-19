@@ -18,6 +18,10 @@ export interface ElectronAPI {
   // API key status
   getApiKeyStatus: () => Promise<boolean>
 
+  // Settings
+  getSetting: (key: string, defaultValue?: string) => Promise<string | null>
+  setSetting: (key: string, value: string) => Promise<boolean>
+
   // Event listeners
   onStreamDelta: (
     callback: (data: { conversationId: number; text: string }) => void

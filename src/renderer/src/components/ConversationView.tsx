@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import MessageBubble from './MessageBubble'
 import ModelSelector from './ModelSelector'
+import ThinkingIndicator from './ThinkingIndicator'
 
 interface Message {
   id: number
@@ -92,8 +93,12 @@ function ConversationView({
   const [streamingContent, setStreamingContent] = useState('')
   const [model, setModel] = useState(initialModel)
   const [error, setError] = useState<string | null>(null)
+  const [streamingElapsed, setStreamingElapsed] = useState(0)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const messageQueueRef = useRef<string[]>([])
+  const isProcessingRef = useRef(false)
+  const pendingMessagesRef = useRef<Message[]>([])
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -114,6 +119,9 @@ function ConversationView({
     setInput('')
     setStreamingContent('')
     setIsStreaming(false)
+    messageQueueRef.current = []
+    isProcessingRef.current = false
+    pendingMessagesRef.current = []
   }, [conversationId])
 
   // Register stream listeners
@@ -127,10 +135,13 @@ function ConversationView({
     window.electronAPI.onStreamComplete(async (data) => {
       if (data.conversationId === conversationId) {
         setStreamingContent('')
-        setIsStreaming(false)
+        // Only reset streaming if we're not processing a queue
+        if (!isProcessingRef.current) {
+          setIsStreaming(false)
+        }
         try {
           const msgs = (await window.electronAPI.getMessages(conversationId)) as Message[]
-          setMessages(msgs)
+          setMessages([...msgs, ...pendingMessagesRef.current])
         } catch (err) {
           setError(`Failed to reload messages: ${err}`)
         }
@@ -147,6 +158,20 @@ function ConversationView({
     scrollToBottom()
   }, [messages, streamingContent, scrollToBottom])
 
+  // Track elapsed time while streaming
+  useEffect(() => {
+    if (!isStreaming) {
+      setStreamingElapsed(0)
+      return
+    }
+    const start = Date.now()
+    setStreamingElapsed(0)
+    const interval = setInterval(() => {
+      setStreamingElapsed(Math.floor((Date.now() - start) / 1000))
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [isStreaming])
+
   // Sync model from parent
   useEffect(() => {
     setModel(initialModel)
@@ -160,14 +185,43 @@ function ConversationView({
     [onModelChange]
   )
 
-  const handleSend = useCallback(async () => {
+  const processQueue = useCallback(async () => {
+    if (isProcessingRef.current || messageQueueRef.current.length === 0) return
+
+    isProcessingRef.current = true
+    setIsStreaming(true)
+    setStreamingContent('')
+
+    while (messageQueueRef.current.length > 0) {
+      const nextMessage = messageQueueRef.current.shift()!
+      setStreamingContent('')
+
+      try {
+        await window.electronAPI.sendMessage(conversationId, nextMessage, model)
+        // This message is now in DB (ipc handler saves user + assistant)
+        pendingMessagesRef.current.shift()
+        const msgs = (await window.electronAPI.getMessages(conversationId)) as Message[]
+        setMessages([...msgs, ...pendingMessagesRef.current])
+      } catch (err) {
+        // User message was saved to DB even on error
+        pendingMessagesRef.current.shift()
+        setError(`Failed to send message: ${err}`)
+        const msgs = (await window.electronAPI.getMessages(conversationId)) as Message[]
+        setMessages([...msgs, ...pendingMessagesRef.current])
+      }
+    }
+
+    setIsStreaming(false)
+    setStreamingContent('')
+    isProcessingRef.current = false
+  }, [conversationId, model])
+
+  const handleSend = useCallback(() => {
     const trimmed = input.trim()
-    if (!trimmed || isStreaming) return
+    if (!trimmed) return
 
     setError(null)
     setInput('')
-    setIsStreaming(true)
-    setStreamingContent('')
 
     // Optimistically add user message
     const optimisticMsg: Message = {
@@ -178,15 +232,12 @@ function ConversationView({
       created_at: new Date().toISOString()
     }
     setMessages((prev) => [...prev, optimisticMsg])
+    pendingMessagesRef.current.push(optimisticMsg)
 
-    try {
-      await window.electronAPI.sendMessage(conversationId, trimmed, model)
-    } catch (err) {
-      setError(`Failed to send message: ${err}`)
-      setIsStreaming(false)
-      setStreamingContent('')
-    }
-  }, [input, isStreaming, conversationId, model])
+    // Add to queue and start processing
+    messageQueueRef.current.push(trimmed)
+    processQueue()
+  }, [input, conversationId, processQueue])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -216,12 +267,59 @@ function ConversationView({
 
       {/* Messages area */}
       <div style={styles.messagesArea}>
-        {messages.map((msg) => (
-          <MessageBubble key={msg.id} role={msg.role} content={msg.content} />
-        ))}
-        {isStreaming && streamingContent && (
-          <MessageBubble role="assistant" content={streamingContent} />
-        )}
+        {(() => {
+          // Find the first unanswered user message
+          let firstUnansweredIndex = -1
+          for (let i = 0; i < messages.length; i++) {
+            const isUnanswered =
+              messages[i].role === 'user' &&
+              (i === messages.length - 1 || messages[i + 1]?.role !== 'assistant')
+            if (isUnanswered && firstUnansweredIndex === -1) {
+              firstUnansweredIndex = i
+            }
+          }
+
+          return messages.flatMap((msg, index) => {
+            const items: React.ReactNode[] = []
+            const isUnanswered =
+              msg.role === 'user' &&
+              (index === messages.length - 1 || messages[index + 1]?.role !== 'assistant')
+
+            // Determine status for user message bubbles
+            let status: 'pending' | 'queued' | undefined
+            if (isUnanswered) {
+              status = index === firstUnansweredIndex ? 'pending' : 'queued'
+            }
+
+            items.push(
+              <MessageBubble
+                key={msg.id}
+                role={msg.role}
+                content={msg.content}
+                status={status}
+              />
+            )
+
+            // Show thinking indicator or streaming content after the active message
+            if (isUnanswered && index === firstUnansweredIndex && isStreaming) {
+              if (streamingContent) {
+                items.push(
+                  <MessageBubble
+                    key={`stream-${msg.id}`}
+                    role="assistant"
+                    content={streamingContent}
+                  />
+                )
+              } else {
+                items.push(
+                  <ThinkingIndicator key={`think-${msg.id}`} elapsed={streamingElapsed} />
+                )
+              }
+            }
+
+            return items
+          })
+        })()}
         {error && <div style={styles.error}>{error}</div>}
         <div ref={messagesEndRef} />
       </div>
@@ -235,16 +333,12 @@ function ConversationView({
           onChange={handleInputChange}
           onKeyDown={handleKeyDown}
           placeholder="Type a message... (Enter to send, Shift+Enter for newline)"
-          disabled={isStreaming}
           rows={1}
         />
         <button
-          style={{
-            ...styles.sendButton,
-            ...(isStreaming ? { opacity: 0.5, cursor: 'not-allowed' } : {})
-          }}
+          style={styles.sendButton}
           onClick={handleSend}
-          disabled={isStreaming || !input.trim()}
+          disabled={!input.trim()}
         >
           Send
         </button>

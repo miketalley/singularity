@@ -27,6 +27,12 @@ const electronAPI = {
   // API key status
   getApiKeyStatus: (): Promise<boolean> => ipcRenderer.invoke('get-api-key-status'),
 
+  // Settings
+  getSetting: (key: string, defaultValue?: string): Promise<string | null> =>
+    ipcRenderer.invoke('get-setting', key, defaultValue),
+  setSetting: (key: string, value: string): Promise<boolean> =>
+    ipcRenderer.invoke('set-setting', key, value),
+
   // Event listeners
   onStreamDelta: (
     callback: (data: { conversationId: number; text: string }) => void

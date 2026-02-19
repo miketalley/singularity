@@ -7,6 +7,7 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 interface MessageBubbleProps {
   role: 'user' | 'assistant'
   content: string
+  status?: 'pending' | 'queued'
 }
 
 const styles: Record<string, React.CSSProperties> = {
@@ -48,14 +49,57 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: '3px',
     fontFamily: 'monospace',
     fontSize: '13px'
+  },
+  statusLine: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    marginTop: '6px',
+    paddingTop: '5px',
+    borderTop: '1px solid rgba(255, 255, 255, 0.1)',
+    fontSize: '11px',
+    opacity: 0.7
   }
 }
 
-function MessageBubble({ role, content }: MessageBubbleProps): React.JSX.Element {
+function PulsingDot(): React.JSX.Element {
+  const [on, setOn] = React.useState(true)
+  React.useEffect(() => {
+    const interval = setInterval(() => setOn((v) => !v), 600)
+    return () => clearInterval(interval)
+  }, [])
+  return (
+    <span
+      style={{
+        display: 'inline-block',
+        width: '6px',
+        height: '6px',
+        borderRadius: '50%',
+        backgroundColor: 'var(--accent-color)',
+        opacity: on ? 1 : 0.3,
+        transition: 'opacity 0.3s ease'
+      }}
+    />
+  )
+}
+
+function MessageBubble({ role, content, status }: MessageBubbleProps): React.JSX.Element {
   if (role === 'user') {
     return (
       <div style={styles.userRow}>
-        <div style={styles.userBubble}>{content}</div>
+        <div style={styles.userBubble}>
+          {content}
+          {status === 'pending' && (
+            <div style={styles.statusLine}>
+              <PulsingDot /> Awaiting response...
+            </div>
+          )}
+          {status === 'queued' && (
+            <div style={{ ...styles.statusLine, opacity: 0.5 }}>
+              <span style={{ fontSize: '10px' }}>&#9679;</span> Queued
+            </div>
+          )}
+        </div>
       </div>
     )
   }

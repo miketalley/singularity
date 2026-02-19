@@ -29,18 +29,28 @@ function App(): React.JSX.Element {
   const [hasApiKey, setHasApiKey] = useState<boolean | null>(null)
   const [activeConversation, setActiveConversation] = useState<ActiveConversation | null>(null)
   const [refreshTrigger, setRefreshTrigger] = useState(0)
+  const [defaultModel, setDefaultModel] = useState('claude-sonnet-4-6')
 
-  // Check API key status on mount
+  // Check API key status and load settings on mount
   useEffect(() => {
-    async function checkApiKey(): Promise<void> {
+    async function init(): Promise<void> {
       try {
         const status = await window.electronAPI.getApiKeyStatus()
         setHasApiKey(status)
       } catch {
         setHasApiKey(false)
       }
+      try {
+        const savedModel = await window.electronAPI.getSetting(
+          'default_model',
+          'claude-sonnet-4-6'
+        )
+        if (savedModel) setDefaultModel(savedModel)
+      } catch {
+        // Use default
+      }
     }
-    checkApiKey()
+    init()
   }, [])
 
   // Listen for conversation title updates
@@ -74,7 +84,6 @@ function App(): React.JSX.Element {
 
   const handleNewConversation = useCallback(async (workspaceId: number) => {
     try {
-      const defaultModel = 'claude-sonnet-4-6'
       const conv = (await window.electronAPI.createConversation(workspaceId, defaultModel)) as {
         id: number
         workspace_id: number
@@ -90,6 +99,28 @@ function App(): React.JSX.Element {
       setRefreshTrigger((prev) => prev + 1)
     } catch (err) {
       console.error('Failed to create conversation:', err)
+    }
+  }, [defaultModel])
+
+  const handleDeleteConversation = useCallback(
+    (conversationId: number) => {
+      setActiveConversation((prev) => {
+        if (prev && prev.id === conversationId) {
+          return null
+        }
+        return prev
+      })
+      setRefreshTrigger((prev) => prev + 1)
+    },
+    []
+  )
+
+  const handleDefaultModelChange = useCallback(async (model: string) => {
+    setDefaultModel(model)
+    try {
+      await window.electronAPI.setSetting('default_model', model)
+    } catch (err) {
+      console.error('Failed to save default model:', err)
     }
   }, [])
 
@@ -123,7 +154,10 @@ function App(): React.JSX.Element {
         activeConversationId={activeConversation?.id ?? null}
         onSelectConversation={handleSelectConversation}
         onNewConversation={handleNewConversation}
+        onDeleteConversation={handleDeleteConversation}
         refreshTrigger={refreshTrigger}
+        defaultModel={defaultModel}
+        onDefaultModelChange={handleDefaultModelChange}
       />
       <div style={styles.content}>
         {activeConversation ? (
