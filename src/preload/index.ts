@@ -47,6 +47,7 @@ const electronAPI = {
   removeStreamListeners: (): void => {
     ipcRenderer.removeAllListeners('stream-delta')
     ipcRenderer.removeAllListeners('stream-complete')
+    ipcRenderer.removeAllListeners('conversation-title-updated')
   }
 }
 
