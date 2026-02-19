@@ -14,24 +14,111 @@ interface Conversation {
   title: string
   model: string
   created_at: string
+  message_count?: number
+  needs_review?: number
+  awaiting_response?: number
 }
 
 interface SidebarProps {
   activeConversationId: number | null
-  onSelectConversation: (conversation: Conversation) => void
-  onNewConversation: (workspaceId: number) => void
+  onSelectConversation: (conversation: Conversation & { workspacePath: string; workspaceName: string }) => void
+  onNewConversation: (workspaceId: number, workspacePath: string, workspaceName: string) => void
   onDeleteConversation: (conversationId: number) => void
   refreshTrigger: number
   defaultModel: string
   onDefaultModelChange: (model: string) => void
+  streamingConversationId: number | null
+  onOpenBrain?: (workspacePath: string, workspaceName: string) => void
+}
+
+function SpinnerIcon(): React.JSX.Element {
+  const [rotation, setRotation] = useState(0)
+  useEffect(() => {
+    const interval = setInterval(() => setRotation((r) => (r + 45) % 360), 100)
+    return () => clearInterval(interval)
+  }, [])
+  return (
+    <span
+      style={{
+        display: 'inline-block',
+        width: '12px',
+        height: '12px',
+        fontSize: '11px',
+        lineHeight: '12px',
+        textAlign: 'center',
+        flexShrink: 0,
+        transform: `rotate(${rotation}deg)`,
+        color: 'var(--accent-color)'
+      }}
+    >
+      &#10227;
+    </span>
+  )
+}
+
+function CheckIcon(): React.JSX.Element {
+  return (
+    <span
+      style={{
+        display: 'inline-block',
+        width: '12px',
+        height: '12px',
+        fontSize: '11px',
+        lineHeight: '12px',
+        textAlign: 'center',
+        flexShrink: 0,
+        color: '#98c379'
+      }}
+    >
+      &#10003;
+    </span>
+  )
+}
+
+function NeedsReviewIcon(): React.JSX.Element {
+  return (
+    <span
+      style={{
+        display: 'inline-block',
+        width: '12px',
+        height: '12px',
+        fontSize: '11px',
+        lineHeight: '12px',
+        textAlign: 'center',
+        flexShrink: 0,
+        color: '#e06c75',
+        fontWeight: 700
+      }}
+    >
+      !
+    </span>
+  )
+}
+
+function AwaitingResponseIcon(): React.JSX.Element {
+  return (
+    <span
+      style={{
+        display: 'inline-block',
+        width: '12px',
+        height: '12px',
+        fontSize: '11px',
+        lineHeight: '12px',
+        textAlign: 'center',
+        flexShrink: 0,
+        color: '#e5c07b',
+        fontWeight: 700
+      }}
+    >
+      ?
+    </span>
+  )
 }
 
 const styles: Record<string, React.CSSProperties> = {
   sidebar: {
-    width: 'var(--sidebar-width)',
-    minWidth: 'var(--sidebar-width)',
+    width: '100%',
     backgroundColor: 'var(--bg-secondary)',
-    borderRight: '1px solid var(--border-color)',
     display: 'flex',
     flexDirection: 'column',
     height: '100%',
@@ -132,13 +219,14 @@ const styles: Record<string, React.CSSProperties> = {
   conversationRow: {
     display: 'flex',
     alignItems: 'center',
-    padding: '4px 12px 4px 32px',
+    padding: '4px 12px 4px 24px',
     cursor: 'pointer',
     fontSize: '13px',
     color: 'var(--text-secondary)',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap'
+    whiteSpace: 'nowrap',
+    gap: '4px'
   },
   conversationActive: {
     backgroundColor: 'var(--bg-active)',
@@ -149,14 +237,6 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap'
-  },
-  deleteConvButton: {
-    fontSize: '12px',
-    color: 'var(--text-secondary)',
-    padding: '0 4px',
-    lineHeight: '1',
-    flexShrink: 0,
-    opacity: 0.5
   },
   headerButtons: {
     display: 'flex',
@@ -203,13 +283,62 @@ function Sidebar({
   onDeleteConversation,
   refreshTrigger,
   defaultModel,
-  onDefaultModelChange
+  onDefaultModelChange,
+  streamingConversationId,
+  onOpenBrain
 }: SidebarProps): React.JSX.Element {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [conversations, setConversations] = useState<Record<number, Conversation[]>>({})
   const [expandedWorkspaces, setExpandedWorkspaces] = useState<Set<number>>(new Set())
   const [menuOpenForWorkspace, setMenuOpenForWorkspace] = useState<number | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [convContextMenu, setConvContextMenu] = useState<{
+    conversationId: number
+    x: number
+    y: number
+  } | null>(null)
+  const [deletedPanelWorkspaceId, setDeletedPanelWorkspaceId] = useState<number | null>(null)
+  const [deletedConversations, setDeletedConversations] = useState<Conversation[]>([])
+  const [whisperStatus, setWhisperStatus] = useState<{
+    modelDownloaded: boolean
+    modelPath: string | null
+    isDownloading: boolean
+  }>({ modelDownloaded: false, modelPath: null, isDownloading: false })
+  const [downloadProgress, setDownloadProgress] = useState<number | null>(null)
+
+  // Load whisper status when settings panel opens
+  useEffect(() => {
+    if (!settingsOpen) return
+    async function loadWhisperStatus(): Promise<void> {
+      try {
+        const status = await window.electronAPI.getWhisperStatus()
+        setWhisperStatus(status)
+      } catch {
+        // ignore
+      }
+    }
+    loadWhisperStatus()
+
+    window.electronAPI.onWhisperDownloadProgress((data) => {
+      setDownloadProgress(data.progress)
+    })
+    return () => {
+      window.electronAPI.removeWhisperDownloadListener()
+    }
+  }, [settingsOpen])
+
+  const handleDownloadModel = useCallback(async () => {
+    try {
+      setDownloadProgress(0)
+      await window.electronAPI.downloadWhisperModel()
+      setDownloadProgress(null)
+      const status = await window.electronAPI.getWhisperStatus()
+      setWhisperStatus(status)
+    } catch (err) {
+      console.error('Failed to download whisper model:', err)
+      setDownloadProgress(null)
+    }
+  }, [])
 
   const loadData = useCallback(async () => {
     try {
@@ -265,9 +394,9 @@ function Sidebar({
   }, [])
 
   const handleNewConversation = useCallback(
-    (e: React.MouseEvent, workspaceId: number) => {
+    (e: React.MouseEvent, workspace: Workspace) => {
       e.stopPropagation()
-      onNewConversation(workspaceId)
+      onNewConversation(workspace.id, workspace.path, workspace.name)
     },
     [onNewConversation]
   )
@@ -286,32 +415,117 @@ function Sidebar({
     [loadData]
   )
 
-  const handleDeleteConversation = useCallback(
-    async (e: React.MouseEvent, conversationId: number) => {
-      e.stopPropagation()
-      try {
-        await window.electronAPI.deleteConversation(conversationId)
-        onDeleteConversation(conversationId)
-        await loadData()
-      } catch (err) {
-        console.error('Failed to delete conversation:', err)
-      }
-    },
-    [loadData, onDeleteConversation]
-  )
-
   const toggleMenu = useCallback((e: React.MouseEvent, workspaceId: number) => {
     e.stopPropagation()
     setMenuOpenForWorkspace((prev) => (prev === workspaceId ? null : workspaceId))
   }, [])
 
-  // Close menu on outside click
+  const handleViewDeleted = useCallback(
+    async (e: React.MouseEvent, workspaceId: number) => {
+      e.stopPropagation()
+      setMenuOpenForWorkspace(null)
+      try {
+        const deleted = (await window.electronAPI.getDeletedConversations(
+          workspaceId
+        )) as Conversation[]
+        setDeletedConversations(deleted)
+        setDeletedPanelWorkspaceId(workspaceId)
+      } catch (err) {
+        console.error('Failed to load deleted conversations:', err)
+      }
+    },
+    []
+  )
+
+  const handleRestoreConversation = useCallback(
+    async (conversationId: number) => {
+      try {
+        await window.electronAPI.restoreConversation(conversationId)
+        if (deletedPanelWorkspaceId !== null) {
+          const deleted = (await window.electronAPI.getDeletedConversations(
+            deletedPanelWorkspaceId
+          )) as Conversation[]
+          setDeletedConversations(deleted)
+          if (deleted.length === 0) setDeletedPanelWorkspaceId(null)
+        }
+        await loadData()
+      } catch (err) {
+        console.error('Failed to restore conversation:', err)
+      }
+    },
+    [deletedPanelWorkspaceId, loadData]
+  )
+
+  const handlePermanentlyDelete = useCallback(
+    async (conversationId: number) => {
+      try {
+        await window.electronAPI.permanentlyDeleteConversation(conversationId)
+        if (deletedPanelWorkspaceId !== null) {
+          const deleted = (await window.electronAPI.getDeletedConversations(
+            deletedPanelWorkspaceId
+          )) as Conversation[]
+          setDeletedConversations(deleted)
+          if (deleted.length === 0) setDeletedPanelWorkspaceId(null)
+        }
+      } catch (err) {
+        console.error('Failed to permanently delete conversation:', err)
+      }
+    },
+    [deletedPanelWorkspaceId]
+  )
+
+  const handleConvContextMenu = useCallback((e: React.MouseEvent, conversationId: number) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setConvContextMenu({ conversationId, x: e.clientX, y: e.clientY })
+  }, [])
+
+  const handleConvContextMenuDelete = useCallback(async () => {
+    if (!convContextMenu) return
+    const id = convContextMenu.conversationId
+    setConvContextMenu(null)
+    try {
+      await window.electronAPI.deleteConversation(id)
+      onDeleteConversation(id)
+      await loadData()
+    } catch (err) {
+      console.error('Failed to delete conversation:', err)
+    }
+  }, [convContextMenu, loadData, onDeleteConversation])
+
+  const handleConvContextMenuToggleReview = useCallback(async () => {
+    if (!convContextMenu) return
+    const id = convContextMenu.conversationId
+    // Find the conversation to check its current needs_review status
+    const conv = Object.values(conversations)
+      .flat()
+      .find((c) => c.id === id)
+    const currentlyNeedsReview = conv?.needs_review ?? 0
+    setConvContextMenu(null)
+    try {
+      await window.electronAPI.setConversationNeedsReview(id, !currentlyNeedsReview)
+      await loadData()
+    } catch (err) {
+      console.error('Failed to toggle needs review:', err)
+    }
+  }, [convContextMenu, conversations, loadData])
+
+  const handleConvContextMenuCopyId = useCallback(() => {
+    if (!convContextMenu) return
+    navigator.clipboard.writeText(String(convContextMenu.conversationId))
+    setConvContextMenu(null)
+  }, [convContextMenu])
+
+  // Close menus on outside click
   useEffect(() => {
-    if (menuOpenForWorkspace === null) return
-    const handleClick = (): void => setMenuOpenForWorkspace(null)
+    if (menuOpenForWorkspace === null && convContextMenu === null) return
+    const handleClick = (): void => {
+      setMenuOpenForWorkspace(null)
+      setConvContextMenu(null)
+    }
     document.addEventListener('click', handleClick)
     return () => document.removeEventListener('click', handleClick)
-  }, [menuOpenForWorkspace])
+  }, [menuOpenForWorkspace, convContextMenu])
 
   return (
     <div style={styles.sidebar}>
@@ -356,7 +570,7 @@ function Sidebar({
                 <span style={styles.workspaceName}>{workspace.name}</span>
                 <button
                   style={styles.newConvButton}
-                  onClick={(e) => handleNewConversation(e, workspace.id)}
+                  onClick={(e) => handleNewConversation(e, workspace)}
                   title="New conversation"
                 >
                   +
@@ -389,6 +603,36 @@ function Sidebar({
                       </button>
                       <button
                         style={styles.dropdownItem}
+                        onClick={(e) => handleViewDeleted(e, workspace.id)}
+                        onMouseEnter={(e) =>
+                          (e.currentTarget.style.backgroundColor = 'var(--bg-active)')
+                        }
+                        onMouseLeave={(e) =>
+                          (e.currentTarget.style.backgroundColor = 'transparent')
+                        }
+                      >
+                        View Completed Conversations
+                      </button>
+                      {onOpenBrain && (
+                        <button
+                          style={styles.dropdownItem}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setMenuOpenForWorkspace(null)
+                            onOpenBrain(workspace.path, workspace.name)
+                          }}
+                          onMouseEnter={(e) =>
+                            (e.currentTarget.style.backgroundColor = 'var(--bg-active)')
+                          }
+                          onMouseLeave={(e) =>
+                            (e.currentTarget.style.backgroundColor = 'transparent')
+                          }
+                        >
+                          View Learning
+                        </button>
+                      )}
+                      <button
+                        style={styles.dropdownItem}
                         onClick={(e) => handleRemoveWorkspace(e, workspace.id)}
                         onMouseEnter={(e) =>
                           (e.currentTarget.style.backgroundColor = 'var(--bg-active)')
@@ -408,6 +652,7 @@ function Sidebar({
               {isExpanded &&
                 wsConversations.map((conv) => {
                   const isActive = conv.id === activeConversationId
+                  const isStreamingConv = conv.id === streamingConversationId
                   return (
                     <div
                       key={conv.id}
@@ -415,19 +660,20 @@ function Sidebar({
                         ...styles.conversationRow,
                         ...(isActive ? styles.conversationActive : {})
                       }}
-                      onClick={() => onSelectConversation(conv)}
+                      onClick={() => onSelectConversation({ ...conv, workspacePath: workspace.path, workspaceName: workspace.name })}
+                      onContextMenu={(e) => handleConvContextMenu(e, conv.id)}
                       title={conv.title}
                     >
+                      {isStreamingConv ? (
+                        <SpinnerIcon />
+                      ) : conv.awaiting_response ? (
+                        <AwaitingResponseIcon />
+                      ) : conv.needs_review ? (
+                        <NeedsReviewIcon />
+                      ) : (conv.message_count ?? 0) > 0 ? (
+                        <CheckIcon />
+                      ) : null}
                       <span style={styles.conversationTitle}>{conv.title}</span>
-                      <button
-                        style={styles.deleteConvButton}
-                        onClick={(e) => handleDeleteConversation(e, conv.id)}
-                        onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
-                        onMouseLeave={(e) => (e.currentTarget.style.opacity = '0.5')}
-                        title="Delete conversation"
-                      >
-                        ✕
-                      </button>
                     </div>
                   )
                 })}
@@ -443,6 +689,249 @@ function Sidebar({
           <div style={styles.settingsRow}>
             <span style={styles.settingsLabel}>Default model</span>
             <ModelSelector value={defaultModel} onChange={onDefaultModelChange} />
+          </div>
+          <div style={{ ...styles.settingsRow, flexDirection: 'column', alignItems: 'stretch' }}>
+            <span style={styles.settingsLabel}>Voice transcription</span>
+            {whisperStatus.modelDownloaded ? (
+              <span style={{ fontSize: '11px', color: '#98c379' }}>
+                &#10003; Model ready
+              </span>
+            ) : downloadProgress !== null ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div
+                  style={{
+                    height: '4px',
+                    backgroundColor: 'var(--bg-primary)',
+                    borderRadius: '2px',
+                    overflow: 'hidden'
+                  }}
+                >
+                  <div
+                    style={{
+                      height: '100%',
+                      width: `${downloadProgress}%`,
+                      backgroundColor: 'var(--accent-color)',
+                      transition: 'width 0.2s'
+                    }}
+                  />
+                </div>
+                <span style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>
+                  Downloading model... {downloadProgress}%
+                </span>
+              </div>
+            ) : (
+              <button
+                onClick={handleDownloadModel}
+                style={{
+                  fontSize: '11px',
+                  padding: '4px 8px',
+                  backgroundColor: 'var(--accent-color)',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '3px',
+                  cursor: 'pointer'
+                }}
+              >
+                Download Model (142 MB)
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Conversation context menu */}
+      {convContextMenu && (
+        <div
+          style={{
+            ...styles.dropdown,
+            position: 'fixed',
+            top: convContextMenu.y,
+            left: convContextMenu.x,
+            width: 'max-content'
+          }}
+        >
+          <button
+            style={styles.dropdownItem}
+            onClick={handleConvContextMenuCopyId}
+            onMouseEnter={(e) =>
+              (e.currentTarget.style.backgroundColor = 'var(--bg-active)')
+            }
+            onMouseLeave={(e) =>
+              (e.currentTarget.style.backgroundColor = 'transparent')
+            }
+          >
+            Copy Conversation ID
+          </button>
+          <button
+            style={styles.dropdownItem}
+            onClick={handleConvContextMenuToggleReview}
+            onMouseEnter={(e) =>
+              (e.currentTarget.style.backgroundColor = 'var(--bg-active)')
+            }
+            onMouseLeave={(e) =>
+              (e.currentTarget.style.backgroundColor = 'transparent')
+            }
+          >
+            {(() => {
+              const conv = Object.values(conversations)
+                .flat()
+                .find((c) => c.id === convContextMenu.conversationId)
+              return conv?.needs_review ? 'Review Completed' : 'Needs Review'
+            })()}
+          </button>
+          <button
+            style={{ ...styles.dropdownItem, color: '#e06c75' }}
+            onClick={handleConvContextMenuDelete}
+            onMouseEnter={(e) =>
+              (e.currentTarget.style.backgroundColor = 'var(--bg-active)')
+            }
+            onMouseLeave={(e) =>
+              (e.currentTarget.style.backgroundColor = 'transparent')
+            }
+          >
+            Mark Completed
+          </button>
+        </div>
+      )}
+
+      {/* Deleted conversations panel */}
+      {deletedPanelWorkspaceId !== null && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            zIndex: 200,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}
+          onClick={() => setDeletedPanelWorkspaceId(null)}
+        >
+          <div
+            style={{
+              backgroundColor: 'var(--bg-tertiary)',
+              border: '1px solid var(--border-color)',
+              borderRadius: '8px',
+              padding: '16px',
+              width: '400px',
+              maxHeight: '60vh',
+              display: 'flex',
+              flexDirection: 'column',
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '12px'
+              }}
+            >
+              <span
+                style={{
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  color: 'var(--text-primary)'
+                }}
+              >
+                Deleted Conversations
+              </span>
+              <button
+                style={{
+                  fontSize: '14px',
+                  color: 'var(--text-secondary)',
+                  padding: '2px 6px'
+                }}
+                onClick={() => setDeletedPanelWorkspaceId(null)}
+              >
+                ✕
+              </button>
+            </div>
+            <div style={{ overflowY: 'auto', flex: 1 }}>
+              {deletedConversations.length === 0 ? (
+                <div
+                  style={{
+                    fontSize: '12px',
+                    color: 'var(--text-secondary)',
+                    textAlign: 'center',
+                    padding: '20px 0'
+                  }}
+                >
+                  No deleted conversations
+                </div>
+              ) : (
+                deletedConversations.map((conv) => (
+                  <div
+                    key={conv.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      padding: '8px',
+                      borderBottom: '1px solid var(--border-color)',
+                      gap: '8px'
+                    }}
+                  >
+                    <span
+                      style={{
+                        flex: 1,
+                        fontSize: '12px',
+                        color: 'var(--text-primary)',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      }}
+                      title={`ID: ${conv.id} — ${conv.title}`}
+                    >
+                      {conv.title}
+                    </span>
+                    <button
+                      style={{
+                        fontSize: '11px',
+                        color: '#98c379',
+                        padding: '2px 8px',
+                        border: '1px solid #98c379',
+                        borderRadius: '3px',
+                        flexShrink: 0
+                      }}
+                      onClick={() => handleRestoreConversation(conv.id)}
+                      onMouseEnter={(e) =>
+                        (e.currentTarget.style.backgroundColor = 'rgba(152, 195, 121, 0.15)')
+                      }
+                      onMouseLeave={(e) =>
+                        (e.currentTarget.style.backgroundColor = 'transparent')
+                      }
+                    >
+                      Restore
+                    </button>
+                    <button
+                      style={{
+                        fontSize: '11px',
+                        color: '#e06c75',
+                        padding: '2px 8px',
+                        border: '1px solid #e06c75',
+                        borderRadius: '3px',
+                        flexShrink: 0
+                      }}
+                      onClick={() => handlePermanentlyDelete(conv.id)}
+                      onMouseEnter={(e) =>
+                        (e.currentTarget.style.backgroundColor = 'rgba(224, 108, 117, 0.15)')
+                      }
+                      onMouseLeave={(e) =>
+                        (e.currentTarget.style.backgroundColor = 'transparent')
+                      }
+                    >
+                      Delete Forever
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </div>
       )}

@@ -54,6 +54,20 @@ export function initDatabase(): void {
   } catch {
     // Column already exists
   }
+
+  // Migration: add deleted_at column for soft-delete
+  try {
+    db.exec('ALTER TABLE conversations ADD COLUMN deleted_at TEXT DEFAULT NULL')
+  } catch {
+    // Column already exists
+  }
+
+  // Migration: add needs_review column
+  try {
+    db.exec('ALTER TABLE conversations ADD COLUMN needs_review INTEGER DEFAULT 0')
+  } catch {
+    // Column already exists
+  }
 }
 
 export function getDatabase(): Database.Database {
@@ -97,7 +111,33 @@ export function getWorkspaceForConversation(conversationId: number): unknown {
 export function getConversationsByWorkspace(workspaceId: number): unknown[] {
   const database = getDatabase()
   return database
-    .prepare('SELECT * FROM conversations WHERE workspace_id = ? ORDER BY updated_at DESC')
+    .prepare(
+      `SELECT c.*,
+         (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id) as message_count,
+         (SELECT CASE
+           WHEN lm.role = 'assistant' AND (
+             TRIM(lm.content) LIKE '%?'
+             OR lm.content LIKE '%[QUESTION_BLOCK]%'
+           ) THEN 1
+           ELSE 0
+         END
+         FROM messages lm
+         WHERE lm.conversation_id = c.id
+         ORDER BY lm.id DESC
+         LIMIT 1) as awaiting_response
+       FROM conversations c
+       WHERE c.workspace_id = ? AND c.deleted_at IS NULL
+       ORDER BY c.updated_at DESC`
+    )
+    .all(workspaceId)
+}
+
+export function getDeletedConversationsByWorkspace(workspaceId: number): unknown[] {
+  const database = getDatabase()
+  return database
+    .prepare(
+      'SELECT * FROM conversations WHERE workspace_id = ? AND deleted_at IS NOT NULL ORDER BY deleted_at DESC'
+    )
     .all(workspaceId)
 }
 
@@ -133,6 +173,25 @@ export function updateConversationModel(id: number, model: string): void {
 
 export function deleteConversation(id: number): void {
   const database = getDatabase()
+  database
+    .prepare("UPDATE conversations SET deleted_at = datetime('now') WHERE id = ?")
+    .run(id)
+}
+
+export function restoreConversation(id: number): void {
+  const database = getDatabase()
+  database.prepare('UPDATE conversations SET deleted_at = NULL WHERE id = ?').run(id)
+}
+
+export function setConversationNeedsReview(id: number, needsReview: boolean): void {
+  const database = getDatabase()
+  database
+    .prepare('UPDATE conversations SET needs_review = ?, updated_at = datetime(\'now\') WHERE id = ?')
+    .run(needsReview ? 1 : 0, id)
+}
+
+export function permanentlyDeleteConversation(id: number): void {
+  const database = getDatabase()
   database.prepare('DELETE FROM conversations WHERE id = ?').run(id)
 }
 
@@ -160,6 +219,11 @@ export function addMessage(
     .run(conversationId)
 
   return database.prepare('SELECT * FROM messages WHERE id = ?').get(result.lastInsertRowid)
+}
+
+export function deleteMessage(id: number): void {
+  const database = getDatabase()
+  database.prepare('DELETE FROM messages WHERE id = ?').run(id)
 }
 
 export function getSetting(key: string, defaultValue?: string): string | null {
