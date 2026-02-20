@@ -5,20 +5,44 @@ import {
   createWorkspace,
   deleteWorkspace,
   getConversationsByWorkspace,
+  getDeletedConversationsByWorkspace,
   createConversation,
   getConversation,
   getDatabase,
   updateConversationTitle,
   updateConversationModel,
   deleteConversation,
+  setConversationNeedsReview,
+  restoreConversation,
+  permanentlyDeleteConversation,
   getWorkspaceForConversation,
   getMessagesByConversation,
   addMessage,
+  deleteMessage,
   getSetting,
   setSetting
 } from './database'
-import { generateTitle } from './anthropic'
-import { sendClaudeMessage, generateSessionId, isClaudeAvailable } from './claude-cli'
+import { generateTitle, extractMemories } from './anthropic'
+import {
+  readBrain,
+  writeBrain,
+  appendEntries,
+  removeEntry,
+  updateEntry,
+  getCategories,
+  brainExists,
+  scanWorkspace,
+  getTokenWarningThreshold
+} from './brain'
+import type { BrainEntry } from './brain'
+import {
+  sendClaudeMessage,
+  generateSessionId,
+  isClaudeAvailable,
+  getStreamingContent,
+  isProcessActive
+} from './claude-cli'
+import { transcribeAudio, getWhisperStatus, downloadWhisperModel } from './whisper'
 import { log } from './logger'
 
 export function registerIpcHandlers(): void {
@@ -77,6 +101,28 @@ export function registerIpcHandlers(): void {
     return true
   })
 
+  ipcMain.handle(
+    'set-conversation-needs-review',
+    (_event, id: number, needsReview: boolean) => {
+      setConversationNeedsReview(id, needsReview)
+      return true
+    }
+  )
+
+  ipcMain.handle('get-deleted-conversations', (_event, workspaceId: number) => {
+    return getDeletedConversationsByWorkspace(workspaceId)
+  })
+
+  ipcMain.handle('restore-conversation', (_event, id: number) => {
+    restoreConversation(id)
+    return true
+  })
+
+  ipcMain.handle('permanently-delete-conversation', (_event, id: number) => {
+    permanentlyDeleteConversation(id)
+    return true
+  })
+
   // Check if Claude CLI is available
   ipcMain.handle('get-api-key-status', () => {
     return isClaudeAvailable()
@@ -97,10 +143,34 @@ export function registerIpcHandlers(): void {
     return getMessagesByConversation(conversationId)
   })
 
+  ipcMain.handle('delete-message', (_event, messageId: number) => {
+    deleteMessage(messageId)
+    return true
+  })
+
+  // Returns accumulated streaming content if a conversation is actively streaming,
+  // or null if no stream is in progress. This lets the renderer restore streaming
+  // state when the user navigates back to a conversation.
+  ipcMain.handle('get-streaming-state', (_event, conversationId: number) => {
+    return getStreamingContent(conversationId)
+  })
+
+  ipcMain.handle('is-process-active', (_event, conversationId: number) => {
+    return isProcessActive(conversationId)
+  })
+
   ipcMain.handle(
     'send-message',
     async (event, conversationId: number, content: string, model: string) => {
       log('ipc', 'send-message', { conversationId, model, contentLength: content.length })
+
+      // Determine if this is the first message BEFORE saving user message.
+      // We check for any existing messages (not just assistant messages) because
+      // if a previous send failed after the CLI session was created, there won't
+      // be an assistant message but the session still exists on Claude's side.
+      // Using --session-id again would error with "Session ID is already in use".
+      const existingMessages = getMessagesByConversation(conversationId)
+      const isFirstMessage = existingMessages.length === 0
 
       // Save the user message
       addMessage(conversationId, 'user', content)
@@ -139,48 +209,147 @@ export function registerIpcHandlers(): void {
         )
       }
 
-      // Determine if this is the first message (no previous assistant messages)
-      const messages = getMessagesByConversation(conversationId) as Array<{
-        role: string
-      }>
-      const hasAssistantMessages = messages.some((m) => m.role === 'assistant')
-      const isFirstMessage = !hasAssistantMessages
+      // Auto-scan brain on first message if no BRAIN.md exists
+      if (!brainExists(workspace.path)) {
+        const scanned = scanWorkspace(workspace.path)
+        if (scanned.length > 0) {
+          writeBrain(workspace.path, scanned)
+          log('brain', 'Auto-scanned workspace on first message', {
+            workspacePath: workspace.path,
+            entriesFound: scanned.length
+          })
+        }
+      }
+
+      // Read brain context for injection
+      const brain = readBrain(workspace.path)
+      const brainContext = brain.raw || null
 
       log('ipc', 'Sending via Claude CLI', {
         sessionId,
         isFirstMessage,
-        workspacePath: workspace.path
+        workspacePath: workspace.path,
+        hasBrainContext: !!brainContext
       })
 
-      // Send via Claude CLI
-      const responseText = await sendClaudeMessage(
-        conversationId,
-        sessionId,
-        content,
-        workspace.path,
-        model,
-        window,
-        isFirstMessage
-      )
-
-      // Save the assistant response
-      addMessage(conversationId, 'assistant', responseText)
-
-      // Generate title if conversation still has the default title
+      // Start title generation in parallel if conversation still has the default title
+      let titlePromise: Promise<void> | null = null
       if (conv.title === 'New Conversation') {
-        try {
-          const title = await generateTitle(content)
-          updateConversationTitle(conversationId, title)
-          window.webContents.send('conversation-title-updated', {
-            conversationId,
-            title
+        titlePromise = generateTitle(content)
+          .then((title) => {
+            updateConversationTitle(conversationId, title)
+            window.webContents.send('conversation-title-updated', {
+              conversationId,
+              title
+            })
           })
-        } catch (err) {
-          console.error('Failed to generate title:', err)
-        }
+          .catch((err) => {
+            console.error('Failed to generate title:', err)
+          })
       }
 
-      return responseText
+      // Send via Claude CLI. stream-complete is sent here (not in claude-cli.ts)
+      // so the renderer only sees it AFTER the assistant message is saved to DB.
+      // This prevents a race where stream-complete triggers a message reload before
+      // the assistant response exists in the database.
+      try {
+        const responseText = await sendClaudeMessage(
+          conversationId,
+          sessionId,
+          content,
+          workspace.path,
+          model,
+          window,
+          isFirstMessage,
+          brainContext
+        )
+
+        // Save the assistant response
+        addMessage(conversationId, 'assistant', responseText)
+
+        // Wait for title generation to finish if it hasn't already
+        if (titlePromise) await titlePromise
+
+        return responseText
+      } finally {
+        if (!window.isDestroyed()) {
+          window.webContents.send('stream-complete', { conversationId })
+        }
+      }
     }
   )
+
+  // Whisper transcription handlers
+  ipcMain.handle('transcribe-audio', async (_event, wavData: Uint8Array) => {
+    return transcribeAudio(Buffer.from(wavData))
+  })
+
+  ipcMain.handle('get-whisper-status', () => {
+    return getWhisperStatus()
+  })
+
+  ipcMain.handle('download-whisper-model', async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (!window) throw new Error('Could not find browser window')
+    await downloadWhisperModel(window)
+    return true
+  })
+
+  // Brain handlers
+  ipcMain.handle('brain-read', (_event, workspacePath: string) => {
+    return readBrain(workspacePath)
+  })
+
+  ipcMain.handle(
+    'brain-write',
+    (_event, workspacePath: string, entries: BrainEntry[]) => {
+      writeBrain(workspacePath, entries)
+      return true
+    }
+  )
+
+  ipcMain.handle(
+    'brain-append',
+    (_event, workspacePath: string, entries: BrainEntry[]) => {
+      appendEntries(workspacePath, entries)
+      return true
+    }
+  )
+
+  ipcMain.handle('brain-remove', (_event, workspacePath: string, index: number) => {
+    removeEntry(workspacePath, index)
+    return true
+  })
+
+  ipcMain.handle(
+    'brain-update',
+    (_event, workspacePath: string, index: number, entry: BrainEntry) => {
+      updateEntry(workspacePath, index, entry)
+      return true
+    }
+  )
+
+  ipcMain.handle('brain-categories', (_event, workspacePath: string) => {
+    return getCategories(workspacePath)
+  })
+
+  ipcMain.handle('brain-exists', (_event, workspacePath: string) => {
+    return brainExists(workspacePath)
+  })
+
+  ipcMain.handle('brain-scan', (_event, workspacePath: string) => {
+    const entries = scanWorkspace(workspacePath)
+    if (entries.length > 0) {
+      writeBrain(workspacePath, entries)
+    }
+    return readBrain(workspacePath)
+  })
+
+  ipcMain.handle('brain-extract-memories', async (_event, messageContent: string, sentiment: 'positive' | 'negative') => {
+    return extractMemories(messageContent, sentiment)
+  })
+
+  ipcMain.handle('brain-token-threshold', () => {
+    return getTokenWarningThreshold()
+  })
 }

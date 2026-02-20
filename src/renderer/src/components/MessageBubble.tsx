@@ -14,7 +14,7 @@ interface MessageBubbleProps {
   role: 'user' | 'assistant'
   content: string
   status?: 'pending' | 'queued'
-  onLearnFromThis?: (content: string) => void
+  onLearnFromThis?: (content: string, sentiment: 'positive' | 'negative') => void
   onQuestionOptionClick?: (answer: string) => void
 }
 
@@ -97,6 +97,73 @@ function extractTrailingQuestion(content: string): {
   const trailingQuestion = paragraphs.slice(questionStart).join('\n\n')
 
   return { body, trailingQuestion }
+}
+
+interface ApproachBlock {
+  label: string
+  title: string
+  recommended: boolean
+  body: string
+}
+
+function parseApproachBlocks(text: string): {
+  preamble: string
+  approaches: ApproachBlock[]
+  postamble: string
+} | null {
+  // Match approach/option headings: "Approach A: Title", "**Approach A:** Title", "### Approach A: Title"
+  const headingRegex =
+    /^(?:#{1,4}\s+)?(?:\*\*)?(?:Approach|Option)\s+([A-Za-z\d]+)[\s:*—–-]+(.+?)(?:\*\*)?$/gm
+
+  const matches: Array<{
+    index: number
+    endIndex: number
+    id: string
+    title: string
+    recommended: boolean
+  }> = []
+  let m
+  while ((m = headingRegex.exec(text)) !== null) {
+    const rawTitle = m[2].trim().replace(/\*+$/g, '')
+    const recommended = /\(recommended\)/i.test(rawTitle)
+    const title = rawTitle.replace(/\s*\(recommended\)\s*/i, '').trim()
+    matches.push({
+      index: m.index,
+      endIndex: m.index + m[0].length,
+      id: m[1],
+      title,
+      recommended
+    })
+  }
+
+  if (matches.length < 2) return null
+
+  const preamble = text.slice(0, matches[0].index).trim()
+  const approaches: ApproachBlock[] = []
+
+  for (let i = 0; i < matches.length; i++) {
+    const bodyStart = matches[i].endIndex
+    const bodyEnd = i + 1 < matches.length ? matches[i + 1].index : text.length
+    approaches.push({
+      label: /^\d+$/.test(matches[i].id)
+        ? `Option ${matches[i].id}`
+        : `Approach ${matches[i].id}`,
+      title: matches[i].title,
+      recommended: matches[i].recommended,
+      body: text.slice(bodyStart, bodyEnd).trim()
+    })
+  }
+
+  // Separate recommendation paragraph from last approach body
+  const last = approaches[approaches.length - 1]
+  const recMatch = last.body.match(/\n\n(?=(?:my\s+)?recommendation[:\s])/i)
+  let postamble = ''
+  if (recMatch && recMatch.index !== undefined) {
+    postamble = last.body.slice(recMatch.index).trim()
+    last.body = last.body.slice(0, recMatch.index).trim()
+  }
+
+  return { preamble, approaches, postamble }
 }
 
 // Ensure ATX heading markers (e.g. ## ) that aren't at the start of a line
@@ -183,6 +250,56 @@ const styles: Record<string, React.CSSProperties> = {
     textTransform: 'uppercase' as const,
     letterSpacing: '0.5px',
     color: '#e5c07b'
+  },
+  approachCard: {
+    padding: '12px 16px',
+    marginTop: '8px',
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    border: '1px solid rgba(255, 255, 255, 0.08)',
+    borderRadius: '8px',
+    cursor: 'pointer',
+    transition: 'background-color 0.15s ease, border-color 0.15s ease'
+  },
+  approachHeaderRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    flexWrap: 'wrap' as const
+  },
+  approachLabel: {
+    display: 'inline-block',
+    padding: '2px 8px',
+    borderRadius: '4px',
+    backgroundColor: 'var(--accent-color)',
+    color: 'var(--text-bright)',
+    fontSize: '11px',
+    fontWeight: 700,
+    letterSpacing: '0.3px'
+  },
+  approachRecommended: {
+    display: 'inline-block',
+    padding: '2px 6px',
+    borderRadius: '4px',
+    backgroundColor: 'rgba(152, 195, 121, 0.2)',
+    color: '#98c379',
+    fontSize: '10px',
+    fontWeight: 600
+  },
+  approachTitle: {
+    fontWeight: 600,
+    fontSize: '14px',
+    color: 'var(--text-bright)',
+    marginTop: '6px'
+  },
+  approachBody: {
+    fontSize: '12px',
+    color: 'var(--text-secondary)',
+    lineHeight: '1.4',
+    marginTop: '4px',
+    maxHeight: '60px',
+    overflow: 'hidden',
+    maskImage: 'linear-gradient(to bottom, black 60%, transparent 100%)',
+    WebkitMaskImage: 'linear-gradient(to bottom, black 60%, transparent 100%)'
   },
   optionCard: {
     display: 'flex',
@@ -275,7 +392,7 @@ const styles: Record<string, React.CSSProperties> = {
     opacity: 1,
     pointerEvents: 'auto' as const
   },
-  brainButton: {
+  feedbackButton: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -313,17 +430,75 @@ function PulsingDot(): React.JSX.Element {
   )
 }
 
-function BrainActionBar({
-  isVisible,
-  align,
-  onLearnFromThis
+function FeedbackButton({
+  icon,
+  tooltip,
+  hoverColor,
+  onClick,
+  align
 }: {
-  isVisible: boolean
+  icon: string
+  tooltip: string
+  hoverColor: string
+  onClick: () => void
   align: 'left' | 'right'
-  onLearnFromThis: () => void
 }): React.JSX.Element {
   const [showTooltip, setShowTooltip] = useState(false)
 
+  return (
+    <div style={{ position: 'relative', display: 'inline-flex' }}>
+      <button
+        style={styles.feedbackButton}
+        onClick={onClick}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.color = hoverColor
+          e.currentTarget.style.backgroundColor = 'var(--bg-hover)'
+          setShowTooltip(true)
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.color = 'var(--text-secondary)'
+          e.currentTarget.style.backgroundColor = 'transparent'
+          setShowTooltip(false)
+        }}
+      >
+        {icon}
+      </button>
+      {showTooltip && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: '100%',
+            ...(align === 'left' ? { left: 0 } : { right: 0 }),
+            marginBottom: '4px',
+            padding: '4px 8px',
+            fontSize: '11px',
+            color: 'var(--text-bright)',
+            backgroundColor: 'var(--bg-tertiary)',
+            border: '1px solid var(--border-color)',
+            borderRadius: '4px',
+            whiteSpace: 'nowrap',
+            pointerEvents: 'none',
+            zIndex: 300
+          }}
+        >
+          {tooltip}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function FeedbackActionBar({
+  isVisible,
+  align,
+  onThumbsUp,
+  onThumbsDown
+}: {
+  isVisible: boolean
+  align: 'left' | 'right'
+  onThumbsUp: () => void
+  onThumbsDown: () => void
+}): React.JSX.Element {
   return (
     <div
       style={{
@@ -332,47 +507,20 @@ function BrainActionBar({
         justifyContent: align === 'right' ? 'flex-end' : 'flex-start'
       }}
     >
-      <div style={{ position: 'relative', display: 'inline-flex' }}>
-        <button
-          style={styles.brainButton}
-          onClick={onLearnFromThis}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.color = 'var(--accent-color)'
-            e.currentTarget.style.backgroundColor = 'var(--bg-hover)'
-            setShowTooltip(true)
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.color = 'var(--text-secondary)'
-            e.currentTarget.style.backgroundColor = 'transparent'
-            setShowTooltip(false)
-          }}
-        >
-          &#x1F4D6;
-        </button>
-        {showTooltip && (
-          <div
-            style={{
-              position: 'absolute',
-              bottom: '100%',
-              ...(align === 'left'
-                ? { left: 0 }
-                : { right: 0 }),
-              marginBottom: '4px',
-              padding: '4px 8px',
-              fontSize: '11px',
-              color: 'var(--text-bright)',
-              backgroundColor: 'var(--bg-tertiary)',
-              border: '1px solid var(--border-color)',
-              borderRadius: '4px',
-              whiteSpace: 'nowrap',
-              pointerEvents: 'none',
-              zIndex: 300
-            }}
-          >
-            Learn from this
-          </div>
-        )}
-      </div>
+      <FeedbackButton
+        icon={'\u{1F44D}'}
+        tooltip="Learn from this"
+        hoverColor="#98c379"
+        onClick={onThumbsUp}
+        align={align}
+      />
+      <FeedbackButton
+        icon={'\u{1F44E}'}
+        tooltip="Learn what to avoid"
+        hoverColor="#e06c75"
+        onClick={onThumbsDown}
+        align={align}
+      />
     </div>
   )
 }
@@ -409,10 +557,11 @@ function MessageBubble({
             )}
           </div>
           {onLearnFromThis && (
-            <BrainActionBar
+            <FeedbackActionBar
               isVisible={isHovered}
               align="right"
-              onLearnFromThis={() => onLearnFromThis(content)}
+              onThumbsUp={() => onLearnFromThis(content, 'positive')}
+              onThumbsDown={() => onLearnFromThis(content, 'negative')}
             />
           )}
         </div>
@@ -477,11 +626,11 @@ function MessageBubble({
                               style={styles.optionCard}
                               role="button"
                               tabIndex={0}
-                              onClick={() => onQuestionOptionClick?.(String(opt.number))}
+                              onClick={() => onQuestionOptionClick?.(`${opt.number}. ${opt.label} — ${opt.description}`)}
                               onKeyDown={(e) => {
                                 if (e.key === 'Enter' || e.key === ' ') {
                                   e.preventDefault()
-                                  onQuestionOptionClick?.(String(opt.number))
+                                  onQuestionOptionClick?.(`${opt.number}. ${opt.label} — ${opt.description}`)
                                 }
                               }}
                               onMouseEnter={(e) => {
@@ -555,13 +704,68 @@ function MessageBubble({
               )
             }
             const { body, trailingQuestion } = extractTrailingQuestion(seg.text)
+            const approachData = parseApproachBlocks(body)
             return (
               <React.Fragment key={i}>
-                {body && (
+                {approachData ? (
+                  <>
+                    {approachData.preamble && (
+                      <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                        {normalizeMarkdown(approachData.preamble)}
+                      </Markdown>
+                    )}
+                    {approachData.approaches.map((approach, ai) => (
+                      <div
+                        key={ai}
+                        style={styles.approachCard}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() =>
+                          onQuestionOptionClick?.(`${approach.label} - ${approach.title}`)
+                        }
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault()
+                            onQuestionOptionClick?.(`${approach.label} - ${approach.title}`)
+                          }
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = 'rgba(0, 120, 212, 0.12)'
+                          e.currentTarget.style.borderColor = 'var(--accent-color)'
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.04)'
+                          e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.08)'
+                        }}
+                      >
+                        <div style={styles.approachHeaderRow}>
+                          <span style={styles.approachLabel}>{approach.label}</span>
+                          {approach.recommended && (
+                            <span style={styles.approachRecommended}>Recommended</span>
+                          )}
+                        </div>
+                        <div style={styles.approachTitle}>{approach.title}</div>
+                        {approach.body && (
+                          <div style={styles.approachBody}>
+                            {approach.body
+                              .replace(/[*#`]/g, '')
+                              .slice(0, 150)
+                              .trim() + (approach.body.length > 150 ? '…' : '')}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                    {approachData.postamble && (
+                      <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                        {normalizeMarkdown(approachData.postamble)}
+                      </Markdown>
+                    )}
+                  </>
+                ) : body ? (
                   <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                     {normalizeMarkdown(body)}
                   </Markdown>
-                )}
+                ) : null}
                 {trailingQuestion && (
                   <div style={styles.trailingQuestionCard}>
                     <div style={styles.trailingQuestionHeader}>? Response Needed</div>
@@ -575,10 +779,11 @@ function MessageBubble({
           })}
         </div>
         {onLearnFromThis && (
-          <BrainActionBar
+          <FeedbackActionBar
             isVisible={isHovered}
             align="left"
-            onLearnFromThis={() => onLearnFromThis(content)}
+            onThumbsUp={() => onLearnFromThis(content, 'positive')}
+            onThumbsDown={() => onLearnFromThis(content, 'negative')}
           />
         )}
       </div>

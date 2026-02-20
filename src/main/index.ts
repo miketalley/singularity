@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow } from 'electron'
+import { app, shell, BrowserWindow, Menu } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -30,6 +30,34 @@ function createWindow(): void {
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: 'deny' }
+  })
+
+  // Native right-click context menu
+  mainWindow.webContents.on('context-menu', (_event, params) => {
+    const menuItems: Electron.MenuItemConstructorOptions[] = []
+
+    if (params.selectionText) {
+      menuItems.push(
+        { label: 'Copy', role: 'copy', accelerator: 'CmdOrCtrl+C' },
+        { type: 'separator' },
+        { label: 'Select All', role: 'selectAll', accelerator: 'CmdOrCtrl+A' }
+      )
+    }
+
+    if (params.isEditable) {
+      menuItems.length = 0
+      menuItems.push(
+        { label: 'Cut', role: 'cut', accelerator: 'CmdOrCtrl+X' },
+        { label: 'Copy', role: 'copy', accelerator: 'CmdOrCtrl+C' },
+        { label: 'Paste', role: 'paste', accelerator: 'CmdOrCtrl+V' },
+        { type: 'separator' },
+        { label: 'Select All', role: 'selectAll', accelerator: 'CmdOrCtrl+A' }
+      )
+    }
+
+    if (menuItems.length > 0) {
+      Menu.buildFromTemplate(menuItems).popup()
+    }
   })
 
   // HMR for renderer based on electron-vite cli.
