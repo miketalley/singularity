@@ -3,6 +3,7 @@ import MessageBubble from './MessageBubble'
 import ModelSelector from './ModelSelector'
 import ThinkingIndicator from './ThinkingIndicator'
 import ToolActivityIndicator from './ToolActivityIndicator'
+import EphemeralText from './EphemeralText'
 
 interface Message {
   id: number
@@ -334,6 +335,7 @@ function ConversationView({
   const [isRecording, setIsRecording] = useState(false)
   const [isTranscribing, setIsTranscribing] = useState(false)
   const [toolActivity, setToolActivity] = useState('')
+  const [ephemeralText, setEphemeralText] = useState('')
   const [showScrollButton, setShowScrollButton] = useState(false)
   const [failureDetails, setFailureDetails] = useState<Map<number, string>>(new Map())
   const [expandedDetails, setExpandedDetails] = useState<Set<number>>(new Set())
@@ -377,6 +379,7 @@ function ConversationView({
     setStreamingContent('')
     streamingContentRef.current = ''
     setToolActivity('')
+    setEphemeralText('')
     setError(null)
     setFailureDetails(new Map())
     setExpandedDetails(new Set())
@@ -413,6 +416,8 @@ function ConversationView({
   useEffect(() => {
     window.electronAPI.onStreamDelta((data) => {
       if (data.conversationId === conversationId) {
+        // Clear ephemeral text — live streaming content takes over
+        setEphemeralText('')
         setStreamingContent((prev) => {
           const next = prev + data.text
           streamingContentRef.current = next
@@ -424,8 +429,10 @@ function ConversationView({
     window.electronAPI.onToolActivity((data) => {
       if (data.conversationId === conversationId) {
         setToolActivity(data.activity)
-        // Clear narration text so the ToolActivityIndicator shows instead
-        // of the growing MessageBubble with "Let me investigate..." text
+        // Preserve narration text as ephemeral before clearing
+        if (streamingContentRef.current) {
+          setEphemeralText(streamingContentRef.current)
+        }
         setStreamingContent('')
         streamingContentRef.current = ''
       }
@@ -434,6 +441,7 @@ function ConversationView({
     window.electronAPI.onStreamComplete(async (data) => {
       if (data.conversationId === conversationId) {
         setStreamingContent('')
+        setEphemeralText('')
         setToolActivity('')
         // Only reset streaming if we're not processing a queue
         if (!isProcessingRef.current) {
@@ -458,7 +466,7 @@ function ConversationView({
     if (!userHasScrolledUpRef.current) {
       scrollToBottom()
     }
-  }, [messages, streamingContent, toolActivity, scrollToBottom])
+  }, [messages, streamingContent, ephemeralText, toolActivity, scrollToBottom])
 
   // Track elapsed time while streaming
   useEffect(() => {
@@ -843,7 +851,7 @@ function ConversationView({
                 />
               )
 
-              // Show thinking indicator, tool activity, or streaming content after the active message
+              // Show streaming content, ephemeral narration, tool activity, or thinking indicator
               if (isUnanswered && index === firstUnansweredIndex && isStreaming) {
                 if (streamingContent) {
                   items.push(
@@ -852,6 +860,15 @@ function ConversationView({
                       role="assistant"
                       content={streamingContent}
                     />
+                  )
+                } else if (ephemeralText) {
+                  items.push(
+                    <React.Fragment key={`ephemeral-${msg.id}`}>
+                      <EphemeralText text={ephemeralText} />
+                      {toolActivity && (
+                        <ToolActivityIndicator activity={toolActivity} elapsed={streamingElapsed} />
+                      )}
+                    </React.Fragment>
                   )
                 } else if (toolActivity) {
                   items.push(
