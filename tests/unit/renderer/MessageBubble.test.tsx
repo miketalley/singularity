@@ -101,4 +101,57 @@ describe('MessageBubble', () => {
     const { container } = render(<MessageBubble role="assistant" content="" />)
     expect(container).toBeTruthy()
   })
+
+  // 10. Execution mode options: bold-label em-dash pattern with subagent/parallel detected
+  it('renders clickable option cards for execution mode bold-label pattern', () => {
+    const content = `Two execution options:\n\n**Subagent-Driven (this session)** — I dispatch fresh subagents per task, review between tasks, fast iteration\n**Parallel Session (separate)** — Open new session with executing-plans, batch execution with checkpoints`
+    render(<MessageBubble role="assistant" content={content} />)
+
+    expect(screen.getByText('Subagent-Driven (this session)')).toBeTruthy()
+    expect(screen.getByText('Parallel Session (separate)')).toBeTruthy()
+
+    // Should render as clickable buttons
+    const buttons = screen.getAllByRole('button')
+    expect(buttons.length).toBeGreaterThanOrEqual(2)
+  })
+
+  // 11. Clicking execution mode option calls onQuestionOptionClick
+  it('calls onQuestionOptionClick when execution mode option is clicked', () => {
+    const handleClick = vi.fn()
+    const content = `Two execution options:\n\n**Subagent-Driven (this session)** — I dispatch fresh subagents per task\n**Parallel Session (separate)** — Open new session with executing-plans`
+    render(
+      <MessageBubble
+        role="assistant"
+        content={content}
+        onQuestionOptionClick={handleClick}
+      />
+    )
+
+    const option = screen.getByText('Subagent-Driven (this session)').closest('[role="button"]')!
+    fireEvent.click(option)
+
+    expect(handleClick).toHaveBeenCalledTimes(1)
+    expect(handleClick).toHaveBeenCalledWith(
+      '1. Subagent-Driven (this session) — I dispatch fresh subagents per task'
+    )
+  })
+
+  // 12. Bold-label list WITHOUT subagent/parallel keywords is NOT rendered as options
+  it('does not render option cards for unrelated bold-label em-dash lists', () => {
+    const content = `Key concepts:\n\n**Immutability** — Data that cannot be changed after creation\n**Polymorphism** — Objects taking many forms`
+    render(<MessageBubble role="assistant" content={content} />)
+
+    // Should render as plain markdown, not as option cards with role="button"
+    const buttons = screen.queryAllByRole('button')
+    expect(buttons.length).toBe(0)
+  })
+
+  // 13. Bold-label list with only ONE of subagent/parallel is NOT rendered as options
+  it('does not render option cards when only one execution keyword is present', () => {
+    const content = `Two approaches:\n\n**Subagent approach** — Use subagents for everything\n**Manual approach** — Do it by hand`
+    render(<MessageBubble role="assistant" content={content} />)
+
+    const buttons = screen.queryAllByRole('button')
+    expect(buttons.length).toBe(0)
+  })
 })

@@ -82,7 +82,10 @@ function extractTrailingQuestion(content: string): {
   for (let i = paragraphs.length - 1; i >= 0; i--) {
     const trimmed = paragraphs[i].trim()
     if (!trimmed) continue
-    if (trimmed.endsWith('?')) {
+    // Strip trailing markdown formatting (bold/italic/code) so
+    // questions like **Does this look right?** are still detected.
+    const stripped = trimmed.replace(/[*_`]+$/, '')
+    if (stripped.endsWith('?')) {
       questionStart = i
     } else {
       break
@@ -166,16 +169,55 @@ function parseApproachBlocks(text: string): {
   return { preamble, approaches, postamble }
 }
 
+export function parseExecutionModeOptions(text: string): {
+  preamble: string
+  options: Array<{ number: number; label: string; description: string }>
+  postamble: string
+} | null {
+  const itemRegex = /^\*\*(.+?)\*\*\s*[—–-]\s*(.+)$/gm
+  const items: Array<{
+    index: number
+    endIndex: number
+    label: string
+    description: string
+  }> = []
+  let match
+  while ((match = itemRegex.exec(text)) !== null) {
+    items.push({
+      index: match.index,
+      endIndex: match.index + match[0].length,
+      label: match[1].trim(),
+      description: match[2].trim()
+    })
+  }
+
+  if (items.length < 2) return null
+
+  // Only activate when BOTH subagent and parallel keywords are present
+  const hasSubagent = items.some((item) => /subagent/i.test(item.label))
+  const hasParallel = items.some((item) => /parallel/i.test(item.label))
+  if (!hasSubagent || !hasParallel) return null
+
+  const preamble = text.slice(0, items[0].index).trim()
+  const postamble = text.slice(items[items.length - 1].endIndex).trim()
+
+  return {
+    preamble,
+    options: items.map((item, i) => ({
+      number: i + 1,
+      label: item.label,
+      description: item.description
+    })),
+    postamble
+  }
+}
+
 function parseNumberedOptions(text: string): {
   preamble: string
   options: Array<{ number: number; label: string; description: string }>
   postamble: string
 } | null {
-  // Only trigger when surrounding text suggests a choice
-  const keywordPattern = /\b(approach|option|choose|prefer|select|which|strategy|method)\b/i
-  if (!keywordPattern.test(text)) return null
-
-  const itemRegex = /^(\d+)\.\s+(.+?)\s+[—–-]\s+(.+)$/gm
+  const itemRegex = /^(\d+)\.\s+(.+?)\s+[—–]\s+(.+)$/gm
   const items: Array<{
     index: number
     endIndex: number
@@ -198,6 +240,15 @@ function parseNumberedOptions(text: string): {
 
   const preamble = text.slice(0, items[0].index).trim()
   const postamble = text.slice(items[items.length - 1].endIndex).trim()
+
+  // Only trigger when text NEAR the list suggests a choice.
+  // Check the last paragraph before and first paragraph after the list,
+  // not the entire message (which causes false positives in long responses).
+  const keywordPattern = /\b(approach|option|choose|prefer|select|which|strategy|method)\b/i
+  const lastPreambleParagraph = preamble.split(/\n\n+/).pop() || ''
+  const firstPostambleParagraph = postamble.split(/\n\n+/)[0] || ''
+  if (!keywordPattern.test(lastPreambleParagraph) && !keywordPattern.test(firstPostambleParagraph))
+    return null
 
   return {
     preamble,
@@ -750,6 +801,7 @@ function MessageBubble({
             const { body, trailingQuestion } = extractTrailingQuestion(seg.text)
             const approachData = parseApproachBlocks(body)
             const numberedOptions = !approachData ? parseNumberedOptions(body) : null
+            const executionModeOptions = !approachData && !numberedOptions ? parseExecutionModeOptions(body) : null
             return (
               <React.Fragment key={i}>
                 {approachData ? (
@@ -900,6 +952,103 @@ function MessageBubble({
                     {numberedOptions.postamble && (
                       <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                         {normalizeMarkdown(numberedOptions.postamble)}
+                      </Markdown>
+                    )}
+                  </>
+                ) : executionModeOptions ? (
+                  <>
+                    {executionModeOptions.preamble && (
+                      <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                        {normalizeMarkdown(executionModeOptions.preamble)}
+                      </Markdown>
+                    )}
+                    {executionModeOptions.options.map((opt) => (
+                      <div
+                        key={opt.number}
+                        style={styles.optionCard}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() =>
+                          onQuestionOptionClick?.(
+                            `${opt.number}. ${opt.label} — ${opt.description}`
+                          )
+                        }
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault()
+                            onQuestionOptionClick?.(
+                              `${opt.number}. ${opt.label} — ${opt.description}`
+                            )
+                          }
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor =
+                            'rgba(0, 120, 212, 0.12)'
+                          e.currentTarget.style.borderColor = 'var(--accent-color)'
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor =
+                            'rgba(255, 255, 255, 0.04)'
+                          e.currentTarget.style.borderColor =
+                            'rgba(255, 255, 255, 0.08)'
+                        }}
+                      >
+                        <span style={styles.optionNumber}>{opt.number}</span>
+                        <div style={styles.optionContent}>
+                          <div style={styles.optionLabel}>{opt.label}</div>
+                          <div style={styles.optionDescription}>
+                            {opt.description}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    <div style={styles.customResponseRow}>
+                      <input
+                        style={styles.customResponseInput}
+                        type="text"
+                        placeholder="Other..."
+                        value={customResponse}
+                        onChange={(e) => setCustomResponse(e.target.value)}
+                        onFocus={(e) => {
+                          e.currentTarget.style.borderColor = 'var(--accent-color)'
+                        }}
+                        onBlur={(e) => {
+                          e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.1)'
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && customResponse.trim()) {
+                            onQuestionOptionClick?.(customResponse.trim())
+                            setCustomResponse('')
+                          }
+                        }}
+                      />
+                      <button
+                        style={{
+                          ...styles.customResponseSend,
+                          ...(customResponse.trim() ? {} : { opacity: 0.4, cursor: 'default' })
+                        }}
+                        disabled={!customResponse.trim()}
+                        onClick={() => {
+                          if (customResponse.trim()) {
+                            onQuestionOptionClick?.(customResponse.trim())
+                            setCustomResponse('')
+                          }
+                        }}
+                        onMouseEnter={(e) => {
+                          if (customResponse.trim()) {
+                            e.currentTarget.style.backgroundColor = 'var(--accent-hover)'
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'var(--accent-color)'
+                        }}
+                      >
+                        Send
+                      </button>
+                    </div>
+                    {executionModeOptions.postamble && (
+                      <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                        {normalizeMarkdown(executionModeOptions.postamble)}
                       </Markdown>
                     )}
                   </>
