@@ -166,6 +166,50 @@ function parseApproachBlocks(text: string): {
   return { preamble, approaches, postamble }
 }
 
+function parseNumberedOptions(text: string): {
+  preamble: string
+  options: Array<{ number: number; label: string; description: string }>
+  postamble: string
+} | null {
+  // Only trigger when surrounding text suggests a choice
+  const keywordPattern = /\b(approach|option|choose|prefer|select|which|strategy|method)\b/i
+  if (!keywordPattern.test(text)) return null
+
+  const itemRegex = /^(\d+)\.\s+(.+?)\s+[—–-]\s+(.+)$/gm
+  const items: Array<{
+    index: number
+    endIndex: number
+    number: number
+    label: string
+    description: string
+  }> = []
+  let match
+  while ((match = itemRegex.exec(text)) !== null) {
+    items.push({
+      index: match.index,
+      endIndex: match.index + match[0].length,
+      number: parseInt(match[1]),
+      label: match[2].trim(),
+      description: match[3].trim()
+    })
+  }
+
+  if (items.length < 2) return null
+
+  const preamble = text.slice(0, items[0].index).trim()
+  const postamble = text.slice(items[items.length - 1].endIndex).trim()
+
+  return {
+    preamble,
+    options: items.map((item) => ({
+      number: item.number,
+      label: item.label,
+      description: item.description
+    })),
+    postamble
+  }
+}
+
 // Ensure ATX heading markers (e.g. ## ) that aren't at the start of a line
 // get a blank line inserted before them so react-markdown parses them as headings.
 function normalizeMarkdown(text: string): string {
