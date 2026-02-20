@@ -72,3 +72,34 @@ describe('Session restore - restoration', () => {
     })
   })
 })
+
+describe('Session restore - draft persistence', () => {
+  let mockAPI: MockElectronAPI
+
+  beforeEach(() => {
+    vi.resetModules()
+    vi.useFakeTimers()
+    mockAPI = setupMockElectronAPI()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('debounces draft writes to 1 second', async () => {
+    const { persistDrafts } = await import('../../src/renderer/src/session-restore')
+
+    persistDrafts({ 42: 'hello' })
+    persistDrafts({ 42: 'hello w' })
+    persistDrafts({ 42: 'hello world' })
+
+    // Not written yet (debounced)
+    expect(mockAPI.setSetting).not.toHaveBeenCalledWith('drafts', expect.anything())
+
+    // Advance past debounce
+    vi.advanceTimersByTime(1000)
+
+    expect(mockAPI.setSetting).toHaveBeenCalledWith('drafts', '{"42":"hello world"}')
+    expect(mockAPI.setSetting).toHaveBeenCalledTimes(1)
+  })
+})

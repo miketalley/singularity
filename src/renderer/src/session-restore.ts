@@ -35,3 +35,16 @@ export async function restoreSessionState(): Promise<RestoredSession | null> {
 
   return { workspaceId, conversationId, drafts }
 }
+
+let draftTimer: ReturnType<typeof setTimeout> | null = null
+
+export function persistDrafts(drafts: Record<number, string>): void {
+  if (draftTimer) clearTimeout(draftTimer)
+  draftTimer = setTimeout(() => {
+    const serializable: Record<string, string> = {}
+    for (const [k, v] of Object.entries(drafts)) {
+      if (v) serializable[k] = v
+    }
+    window.electronAPI.setSetting('drafts', JSON.stringify(serializable))
+  }, 1000)
+}
