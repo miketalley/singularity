@@ -151,7 +151,17 @@ const electronAPI = {
 
   removeTitleListener: (): void => {
     ipcRenderer.removeAllListeners('conversation-title-updated')
-  }
+  },
+
+  // Screenshot capture
+  captureScreenshot: (): Promise<{ filePath: string; dataUrl: string }> =>
+    ipcRenderer.invoke('capture-screenshot'),
+
+  // Test-only methods (only registered when NODE_ENV=test)
+  testCreateWorkspace: (name: string, path: string): Promise<unknown> =>
+    ipcRenderer.invoke('test:create-workspace', name, path),
+  testDeleteWorkspacesByPattern: (pattern: string): Promise<boolean> =>
+    ipcRenderer.invoke('test:delete-workspaces-by-pattern', pattern)
 }
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI)

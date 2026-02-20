@@ -1,5 +1,6 @@
-import { ipcMain, dialog, BrowserWindow } from 'electron'
-import { basename } from 'path'
+import { ipcMain, dialog, BrowserWindow, app } from 'electron'
+import { basename, join } from 'path'
+import { writeFile, mkdir } from 'fs/promises'
 import {
   getAllWorkspaces,
   createWorkspace,
@@ -87,6 +88,24 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('create-conversation', (_event, workspaceId: number, model: string) => {
     const sessionId = generateSessionId()
     return createConversation(workspaceId, 'New Conversation', model, sessionId)
+  })
+
+  ipcMain.handle('capture-screenshot', async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (!window) throw new Error('Could not find browser window')
+
+    const image = await window.webContents.capturePage()
+    const pngBuffer = image.toPNG()
+
+    const screenshotsDir = join(app.getPath('userData'), 'screenshots')
+    await mkdir(screenshotsDir, { recursive: true })
+
+    const filename = `screenshot-${Date.now()}.png`
+    const filePath = join(screenshotsDir, filename)
+    await writeFile(filePath, pngBuffer)
+
+    const dataUrl = `data:image/png;base64,${pngBuffer.toString('base64')}`
+    return { filePath, dataUrl }
   })
 
   ipcMain.handle('update-conversation-title', (_event, id: number, title: string) => {
@@ -382,4 +401,21 @@ export function registerIpcHandlers(): void {
       })
     })
   })
+
+  // Test-only handler for programmatic workspace creation (bypasses native dialog)
+  if (process.env.NODE_ENV === 'test') {
+    ipcMain.handle('test:create-workspace', (_event, name: string, path: string) => {
+      try {
+        return createWorkspace(name, path)
+      } catch {
+        return null
+      }
+    })
+
+    ipcMain.handle('test:delete-workspaces-by-pattern', (_event, pattern: string) => {
+      const db = getDatabase()
+      db.prepare('DELETE FROM workspaces WHERE path LIKE ?').run(pattern)
+      return true
+    })
+  }
 }

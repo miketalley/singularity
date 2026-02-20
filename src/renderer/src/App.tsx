@@ -310,7 +310,7 @@ function App(): React.JSX.Element {
 
   // Report Problem: create new conversation with bug report message
   const handleReportProblem = useCallback(
-    async (sourceConversationId: number, description: string) => {
+    async (sourceConversationId: number, description: string, screenshotPath?: string) => {
       if (!activeConversation) return
       try {
         const conv = (await window.electronAPI.createConversation(
@@ -333,7 +333,12 @@ function App(): React.JSX.Element {
         })
         setRefreshTrigger((prev) => prev + 1)
         // Auto-send the bug report message
-        const message = `Can you please investigate conversation id ${sourceConversationId}: ${description}`
+        let message: string
+        if (screenshotPath) {
+          message = `[A screenshot of the application has been saved to ${screenshotPath}. Please use your Read tool to view this screenshot and understand what the user was seeing when they reported this problem.]\n\nCan you please investigate conversation id ${sourceConversationId}: ${description}`
+        } else {
+          message = `Can you please investigate conversation id ${sourceConversationId}: ${description}`
+        }
         await window.electronAPI.sendMessage(conv.id, message, conv.model)
       } catch (err) {
         console.error('Failed to report problem:', err)
