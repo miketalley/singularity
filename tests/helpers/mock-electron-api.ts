@@ -70,6 +70,9 @@ export type MockElectronAPI = {
   // Git branch
   getGitBranch: Mock
 
+  // Screenshot capture
+  captureScreenshot: Mock
+
   // Event listeners
   onStreamDelta: Mock
   onStreamComplete: Mock
@@ -151,13 +154,20 @@ export function createMockElectronAPI(): MockElectronAPI {
     // Git branch
     getGitBranch: vi.fn().mockResolvedValue(null),
 
+    // Screenshot capture
+    captureScreenshot: vi.fn().mockResolvedValue({ filePath: '/tmp/screenshot.png', dataUrl: 'data:image/png;base64,abc' }),
+
     // Event listeners
     onStreamDelta: vi.fn(),
     onStreamComplete: vi.fn(),
     onToolActivity: vi.fn(),
     onConversationTitleUpdated: vi.fn(),
     removeStreamListeners: vi.fn(),
-    removeTitleListener: vi.fn()
+    removeTitleListener: vi.fn(),
+
+    // Test-only methods
+    testCreateWorkspace: vi.fn().mockResolvedValue(null),
+    testDeleteWorkspacesByPattern: vi.fn().mockResolvedValue(true)
   }
 }
 
