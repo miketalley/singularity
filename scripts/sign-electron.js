@@ -18,6 +18,18 @@ if (!fs.existsSync(electronApp)) {
 
 const entitlements = path.join(__dirname, 'entitlements.mac.plist')
 
+// Patch the Info.plist so macOS menu bar and dock show "singularity" during development
+const plistPath = path.join(electronApp, 'Contents', 'Info.plist')
+try {
+  execSync(`plutil -replace CFBundleName -string "singularity" "${plistPath}"`, { stdio: 'pipe' })
+  execSync(`plutil -replace CFBundleDisplayName -string "singularity" "${plistPath}"`, {
+    stdio: 'pipe'
+  })
+  console.log('Patched Electron.app Info.plist with app name "singularity"')
+} catch (err) {
+  console.warn('Warning: Failed to patch Info.plist:', err.message)
+}
+
 console.log('Signing Electron.app for macOS compatibility...')
 
 try {

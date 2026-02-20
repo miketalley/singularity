@@ -152,7 +152,7 @@ export async function sendClaudeMessage(
     let fullResponse = ''
     let buffer = ''
     const processedToolUses = new Set<string>()
-    const seenQuestionTexts = new Set<string>()
+    let hasQuestionBlock = false
     let needsSeparatorBeforeNextText = false
 
     child.stdout?.on('data', (data: Buffer) => {
@@ -257,20 +257,15 @@ export async function sendClaudeMessage(
                   }
 
                   // AskUserQuestion also appends formatted text to response.
-                  // Deduplicate by question text to prevent retries in
-                  // bypassPermissions mode from triplicating the same question.
-                  if (block.name === 'AskUserQuestion') {
-                    const data = block.input as {
-                      questions?: Array<{ question: string }>
-                    }
-                    const questionKey =
-                      data?.questions?.map((q) => q.question).join('|') || ''
-                    if (!seenQuestionTexts.has(questionKey)) {
-                      seenQuestionTexts.add(questionKey)
-                      const formatted = formatAskUserQuestion(block.input)
-                      if (formatted) {
-                        questionText += formatted
-                      }
+                  // In bypassPermissions mode, the CLI denies AskUserQuestion
+                  // (is_error: true), and the model retries with rephrased
+                  // questions (new tool_use id, slightly different wording).
+                  // Only keep the first one to avoid duplicates.
+                  if (block.name === 'AskUserQuestion' && !hasQuestionBlock) {
+                    hasQuestionBlock = true
+                    const formatted = formatAskUserQuestion(block.input)
+                    if (formatted) {
+                      questionText += formatted
                     }
                   }
                 }

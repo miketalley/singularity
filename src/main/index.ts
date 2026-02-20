@@ -73,70 +73,85 @@ function createWindow(): void {
 // Set app name early so macOS menu bar shows "singularity"
 app.name = 'singularity'
 
-app.whenReady().then(() => {
-  // Set app user model id for windows
-  electronApp.setAppUserModelId('com.electron')
+// Prevent duplicate instances — second launch focuses existing window instead
+const gotTheLock = app.requestSingleInstanceLock()
 
-  // Set macOS application menu with correct app name
-  if (process.platform === 'darwin') {
-    const template: Electron.MenuItemConstructorOptions[] = [
-      {
-        label: app.name,
-        submenu: [
-          { role: 'about' },
-          { type: 'separator' },
-          { role: 'services' },
-          { type: 'separator' },
-          { role: 'hide' },
-          { role: 'hideOthers' },
-          { role: 'unhide' },
-          { type: 'separator' },
-          { role: 'quit' }
-        ]
-      },
-      { role: 'editMenu' },
-      { role: 'viewMenu' },
-      { role: 'windowMenu' }
-    ]
-    Menu.setApplicationMenu(Menu.buildFromTemplate(template))
-  }
-
-  // Default open or close DevTools by F12 in development
-  // and ignore CommandOrControl + R in production.
-  app.on('browser-window-created', (_, window) => {
-    optimizer.watchWindowShortcuts(window)
+if (!gotTheLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    const windows = BrowserWindow.getAllWindows()
+    if (windows.length > 0) {
+      if (windows[0].isMinimized()) windows[0].restore()
+      windows[0].focus()
+    }
   })
 
-  // Initialize logger
-  initLogger()
-  log('app', `Log file: ${getLogPath()}`)
+  app.whenReady().then(() => {
+    // Set app user model id for windows
+    electronApp.setAppUserModelId('com.electron')
 
-  // Initialize database
-  initDatabase()
-  log('app', 'Database initialized')
+    // Set macOS application menu with correct app name
+    if (process.platform === 'darwin') {
+      const template: Electron.MenuItemConstructorOptions[] = [
+        {
+          label: app.name,
+          submenu: [
+            { role: 'about' },
+            { type: 'separator' },
+            { role: 'services' },
+            { type: 'separator' },
+            { role: 'hide' },
+            { role: 'hideOthers' },
+            { role: 'unhide' },
+            { type: 'separator' },
+            { role: 'quit' }
+          ]
+        },
+        { role: 'editMenu' },
+        { role: 'viewMenu' },
+        { role: 'windowMenu' }
+      ]
+      Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+    }
 
-  // Initialize Anthropic client (used for title generation)
-  initAnthropicClient()
-  log('app', 'Anthropic client initialized')
+    // Default open or close DevTools by F12 in development
+    // and ignore CommandOrControl + R in production.
+    app.on('browser-window-created', (_, window) => {
+      optimizer.watchWindowShortcuts(window)
+    })
 
-  // Register IPC handlers (includes get-api-key-status)
-  registerIpcHandlers()
-  log('app', 'IPC handlers registered')
+    // Initialize logger
+    initLogger()
+    log('app', `Log file: ${getLogPath()}`)
 
-  // Start polling Claude API usage data every 5 minutes
-  startUsagePolling()
-  log('app', 'Usage polling started')
+    // Initialize database
+    initDatabase()
+    log('app', 'Database initialized')
 
-  createWindow()
+    // Initialize Anthropic client (used for title generation)
+    initAnthropicClient()
+    log('app', 'Anthropic client initialized')
 
-  app.on('activate', function () {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    // Register IPC handlers (includes get-api-key-status)
+    registerIpcHandlers()
+    log('app', 'IPC handlers registered')
+
+    // Start polling Claude API usage data every 5 minutes
+    startUsagePolling()
+    log('app', 'Usage polling started')
+
+    createWindow()
+
+    app.on('activate', function () {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    })
   })
-})
 
-app.on('window-all-closed', () => {
-  stopUsagePolling()
-  if (process.platform !== 'darwin') {
-    app.quit()
-  }
-})
+  app.on('window-all-closed', () => {
+    stopUsagePolling()
+    if (process.platform !== 'darwin') {
+      app.quit()
+    }
+  })
+}

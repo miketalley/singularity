@@ -20,11 +20,11 @@
     "build:win": "npm run build && electron-builder --win",
     "build:mac": "electron-vite build && electron-builder --mac",
     "build:linux": "electron-vite build && electron-builder --linux",
-    "test": "vitest run",
+    "test": "npm run test:unit && npm run test:e2e",
     "test:watch": "vitest",
-    "test:unit": "vitest run tests/unit",
+    "test:unit": "npm rebuild better-sqlite3 --build-from-source 2>/dev/null && vitest run tests/unit",
     "test:e2e": "npx playwright test",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "npm rebuild better-sqlite3 --build-from-source 2>/dev/null && vitest run --coverage"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.77.0",

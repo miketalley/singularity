@@ -401,6 +401,100 @@ describe('claude-cli', () => {
   })
 
   // -----------------------------------------------------------------------
+  // AskUserQuestion deduplication
+  // -----------------------------------------------------------------------
+  describe('AskUserQuestion deduplication', () => {
+    let mockChild: ReturnType<typeof createMockChildProcess>
+    let mockWindow: BrowserWindow
+
+    beforeEach(() => {
+      mockChild = createMockChildProcess()
+      mockWindow = createMockWindow()
+      vi.mocked(spawn).mockReturnValue(mockChild as never)
+    })
+
+    it('only includes the first AskUserQuestion when multiple are received with different wording', async () => {
+      const promise = sendClaudeMessage(
+        40,
+        'session-dedup',
+        'Hello',
+        '/workspace',
+        'claude-sonnet-4-20250514',
+        mockWindow,
+        true
+      )
+
+      // Simulate three assistant events with AskUserQuestion tool_uses
+      // (different IDs and slightly different question text — mimics
+      // bypassPermissions denial retry behaviour where the model rephrases)
+      const makeAssistantEvent = (
+        toolId: string,
+        questionText: string
+      ) =>
+        JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [
+              {
+                type: 'tool_use',
+                id: toolId,
+                name: 'AskUserQuestion',
+                input: {
+                  questions: [
+                    {
+                      question: questionText,
+                      options: [
+                        { label: 'Yes', description: 'Option A' },
+                        { label: 'No', description: 'Option B' }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        })
+
+      mockChild.stdout.emit(
+        'data',
+        Buffer.from(
+          makeAssistantEvent('tool-1', 'Do you mean narration text that flashes briefly?') + '\n'
+        )
+      )
+      await new Promise((r) => setTimeout(r, 0))
+
+      mockChild.stdout.emit(
+        'data',
+        Buffer.from(
+          makeAssistantEvent('tool-2', 'By thinking text do you mean narration?') + '\n'
+        )
+      )
+      await new Promise((r) => setTimeout(r, 0))
+
+      mockChild.stdout.emit(
+        'data',
+        Buffer.from(
+          makeAssistantEvent('tool-3', 'Is thinking text the narration text?') + '\n'
+        )
+      )
+      await new Promise((r) => setTimeout(r, 0))
+
+      mockChild.emit('close', 0)
+      const result = await promise
+
+      // Should contain exactly one QUESTION_BLOCK, not three
+      const questionBlockCount = (result.match(/\[QUESTION_BLOCK\]/g) || []).length
+      expect(questionBlockCount).toBe(1)
+
+      // Should contain the first question's text
+      expect(result).toContain('Do you mean narration text that flashes briefly?')
+      // Should NOT contain the retry questions
+      expect(result).not.toContain('By thinking text do you mean narration?')
+      expect(result).not.toContain('Is thinking text the narration text?')
+    })
+  })
+
+  // -----------------------------------------------------------------------
   // cancelClaudeProcess
   // -----------------------------------------------------------------------
   describe('cancelClaudeProcess', () => {

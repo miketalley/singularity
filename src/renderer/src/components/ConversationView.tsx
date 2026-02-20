@@ -460,6 +460,14 @@ function ConversationView({
         const msgs = (await window.electronAPI.getMessages(conversationId)) as Message[]
         setMessages(msgs)
 
+        // Optimistic: if the last message is from the user (unanswered), assume
+        // streaming is active so the thinking indicator shows immediately instead
+        // of the "never got a response" retry bar flickering during the async check.
+        const lastMsg = msgs[msgs.length - 1]
+        if (lastMsg?.role === 'user') {
+          setIsStreaming(true)
+        }
+
         // Recover streaming state if the backend is still actively processing
         // this conversation (e.g. user switched away and back, or app reloaded).
         const content = await window.electronAPI.getStreamingState(conversationId)
@@ -476,6 +484,73 @@ function ConversationView({
       }
     })()
   }, [conversationId])
+
+  const processQueue = useCallback(async () => {
+    if (isProcessingRef.current || messageQueueRef.current.length === 0) return
+
+    isProcessingRef.current = true
+    setIsStreaming(true)
+    setStreamingContent('')
+    streamingContentRef.current = ''
+    setToolActivity('')
+
+    while (messageQueueRef.current.length > 0) {
+      const nextMessage = messageQueueRef.current.shift()!
+      setStreamingContent('')
+      streamingContentRef.current = ''
+      setToolActivity('')
+
+      try {
+        await window.electronAPI.sendMessage(conversationId, nextMessage, model)
+        // This message is now in DB (ipc handler saves user + assistant)
+        pendingMessagesRef.current.shift()
+        const msgs = (await window.electronAPI.getMessages(conversationId)) as Message[]
+        setMessages([...msgs, ...pendingMessagesRef.current])
+      } catch (err) {
+        // User message was saved to DB even on error — capture partial
+        // streaming content + error so the user can inspect what happened.
+        const partialContent = streamingContentRef.current
+        const detail = [
+          `Error: ${err}`,
+          partialContent ? `\nPartial response received:\n${partialContent}` : 'No response data was received.'
+        ].join('\n')
+
+        pendingMessagesRef.current.shift()
+        setError(`Failed to send message: ${err}`)
+        const msgs = (await window.electronAPI.getMessages(conversationId)) as Message[]
+        setMessages([...msgs, ...pendingMessagesRef.current])
+
+        // Associate failure detail with the latest user message in DB
+        const lastUserMsg = msgs.filter((m) => m.role === 'user').pop()
+        if (lastUserMsg) {
+          setFailureDetails((prev) => new Map(prev).set(lastUserMsg.id, detail))
+        }
+      }
+    }
+
+    setIsStreaming(false)
+    setStreamingContent('')
+    isProcessingRef.current = false
+  }, [conversationId, model])
+
+  const sendDirectMessage = useCallback((text: string) => {
+    setError(null)
+    userHasScrolledUpRef.current = false
+    setShowScrollButton(false)
+
+    const optimisticMsg: Message = {
+      id: Date.now(),
+      conversation_id: conversationId,
+      role: 'user',
+      content: text,
+      created_at: new Date().toISOString()
+    }
+    setMessages((prev) => [...prev, optimisticMsg])
+    pendingMessagesRef.current.push(optimisticMsg)
+
+    messageQueueRef.current.push(text)
+    processQueue()
+  }, [conversationId, processQueue])
 
   // Register stream listeners
   useEffect(() => {
@@ -694,73 +769,6 @@ function ConversationView({
       audioContextRef.current?.close()
     }
   }, [])
-
-  const processQueue = useCallback(async () => {
-    if (isProcessingRef.current || messageQueueRef.current.length === 0) return
-
-    isProcessingRef.current = true
-    setIsStreaming(true)
-    setStreamingContent('')
-    streamingContentRef.current = ''
-    setToolActivity('')
-
-    while (messageQueueRef.current.length > 0) {
-      const nextMessage = messageQueueRef.current.shift()!
-      setStreamingContent('')
-      streamingContentRef.current = ''
-      setToolActivity('')
-
-      try {
-        await window.electronAPI.sendMessage(conversationId, nextMessage, model)
-        // This message is now in DB (ipc handler saves user + assistant)
-        pendingMessagesRef.current.shift()
-        const msgs = (await window.electronAPI.getMessages(conversationId)) as Message[]
-        setMessages([...msgs, ...pendingMessagesRef.current])
-      } catch (err) {
-        // User message was saved to DB even on error — capture partial
-        // streaming content + error so the user can inspect what happened.
-        const partialContent = streamingContentRef.current
-        const detail = [
-          `Error: ${err}`,
-          partialContent ? `\nPartial response received:\n${partialContent}` : 'No response data was received.'
-        ].join('\n')
-
-        pendingMessagesRef.current.shift()
-        setError(`Failed to send message: ${err}`)
-        const msgs = (await window.electronAPI.getMessages(conversationId)) as Message[]
-        setMessages([...msgs, ...pendingMessagesRef.current])
-
-        // Associate failure detail with the latest user message in DB
-        const lastUserMsg = msgs.filter((m) => m.role === 'user').pop()
-        if (lastUserMsg) {
-          setFailureDetails((prev) => new Map(prev).set(lastUserMsg.id, detail))
-        }
-      }
-    }
-
-    setIsStreaming(false)
-    setStreamingContent('')
-    isProcessingRef.current = false
-  }, [conversationId, model])
-
-  const sendDirectMessage = useCallback((text: string) => {
-    setError(null)
-    userHasScrolledUpRef.current = false
-    setShowScrollButton(false)
-
-    const optimisticMsg: Message = {
-      id: Date.now(),
-      conversation_id: conversationId,
-      role: 'user',
-      content: text,
-      created_at: new Date().toISOString()
-    }
-    setMessages((prev) => [...prev, optimisticMsg])
-    pendingMessagesRef.current.push(optimisticMsg)
-
-    messageQueueRef.current.push(text)
-    processQueue()
-  }, [conversationId, processQueue])
 
   const handleSend = useCallback(() => {
     const trimmed = input.trim()
