@@ -145,6 +145,25 @@ const styles: Record<string, React.CSSProperties> = {
   sendButtonHover: {
     backgroundColor: 'var(--accent-hover)'
   },
+  stopButton: {
+    alignSelf: 'flex-end',
+    padding: '8px 16px',
+    backgroundColor: 'var(--error-color)',
+    color: 'var(--text-bright)',
+    borderRadius: '4px',
+    fontWeight: 500,
+    fontSize: '13px'
+  },
+  queueButton: {
+    alignSelf: 'flex-end',
+    padding: '8px 16px',
+    backgroundColor: 'transparent',
+    color: 'var(--text-secondary)',
+    border: '1px solid var(--border-color)',
+    borderRadius: '4px',
+    fontWeight: 500,
+    fontSize: '13px'
+  },
   micButton: {
     width: '36px',
     height: '36px',
@@ -685,14 +704,45 @@ function ConversationView({
     setError(null)
   }, [])
 
+  const handleStop = useCallback(() => {
+    window.electronAPI.cancelMessage(conversationId)
+  }, [conversationId])
+
+  const handleAdd = useCallback(() => {
+    const trimmed = input.trim()
+    if (!trimmed) return
+
+    setInput('')
+    onDraftChange?.(conversationId, '')
+
+    // Queue the follow-up, then cancel the current response.
+    // processQueue's while loop will pick up the queued message
+    // after the cancelled sendClaudeMessage promise resolves.
+    sendDirectMessage(trimmed)
+    window.electronAPI.cancelMessage(conversationId)
+  }, [input, conversationId, sendDirectMessage, onDraftChange])
+
+  const handleQueue = useCallback(() => {
+    const trimmed = input.trim()
+    if (!trimmed) return
+
+    setInput('')
+    onDraftChange?.(conversationId, '')
+    sendDirectMessage(trimmed)
+  }, [input, conversationId, sendDirectMessage, onDraftChange])
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault()
-        handleSend()
+        if (isStreaming) {
+          handleAdd()
+        } else {
+          handleSend()
+        }
       }
     },
-    [handleSend]
+    [handleSend, handleAdd, isStreaming]
   )
 
   // Auto-resize textarea
@@ -952,16 +1002,57 @@ function ConversationView({
           onChange={handleInputChange}
           onPaste={handlePaste}
           onKeyDown={handleKeyDown}
-          placeholder="Type a message... (Enter to send, Shift+Enter for newline)"
+          placeholder={isStreaming ? 'Add to your thought...' : 'Type a message... (Enter to send, Shift+Enter for newline)'}
           rows={1}
         />
-        <button
-          style={styles.sendButton}
-          onClick={handleSend}
-          disabled={!input.trim()}
-        >
-          Send
-        </button>
+        {isStreaming ? (
+          input.trim() ? (
+            <>
+              <button
+                style={styles.sendButton}
+                onClick={handleAdd}
+                title="Stop current response and send this message"
+              >
+                Add
+              </button>
+              <button
+                style={styles.queueButton}
+                onClick={handleQueue}
+                title="Send after current response finishes"
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--text-secondary)'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--border-color)'
+                }}
+              >
+                Queue
+              </button>
+            </>
+          ) : (
+            <button
+              style={styles.stopButton}
+              onClick={handleStop}
+              title="Stop AI response"
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = '#d13438'
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'var(--error-color)'
+              }}
+            >
+              Stop
+            </button>
+          )
+        ) : (
+          <button
+            style={styles.sendButton}
+            onClick={handleSend}
+            disabled={!input.trim()}
+          >
+            Send
+          </button>
+        )}
         <button
           style={styles.reportButton}
           onClick={openReportModal}

@@ -37,6 +37,8 @@ const electronAPI = {
     ipcRenderer.invoke('get-streaming-state', conversationId),
   isProcessActive: (conversationId: number): Promise<boolean> =>
     ipcRenderer.invoke('is-process-active', conversationId),
+  cancelMessage: (conversationId: number): Promise<void> =>
+    ipcRenderer.invoke('cancel-message', conversationId),
 
   // API key status
   getApiKeyStatus: (): Promise<boolean> => ipcRenderer.invoke('get-api-key-status'),

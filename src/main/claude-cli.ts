@@ -7,6 +7,10 @@ import { log } from './logger'
 // Track active processes per conversation so we can kill them if needed
 const activeProcesses = new Map<number, ChildProcess>()
 
+// Track conversations cancelled voluntarily (Stop/Add) so the close handler
+// resolves with partial content instead of rejecting as an error.
+const cancelledConversations = new Set<number>()
+
 // Track accumulated streaming content per conversation so the renderer can
 // recover it after navigating away and back.
 const streamingState = new Map<number, string>()
@@ -317,9 +321,11 @@ export async function sendClaudeMessage(
 
     child.on('close', (code) => {
       activeProcesses.delete(conversationId)
+      const wasCancelled = cancelledConversations.delete(conversationId)
       log('cli', `Process closed with code ${code}`, {
         responseLength: fullResponse.length,
-        stderr: stderrOutput.slice(0, 500)
+        stderr: stderrOutput.slice(0, 500),
+        wasCancelled
       })
 
       // Drain any remaining buffer — split on newlines just like the data
@@ -356,7 +362,10 @@ export async function sendClaudeMessage(
 
       streamingState.delete(conversationId)
 
-      if (code !== 0 && !fullResponse) {
+      if (wasCancelled) {
+        // Voluntary cancellation — resolve with whatever we have (may be empty)
+        resolve(fullResponse)
+      } else if (code !== 0 && !fullResponse) {
         reject(new Error(stderrOutput || `Claude CLI exited with code ${code}`))
       } else if (code !== 0 && fullResponse) {
         log('cli', 'Process exited with non-zero code but had partial response', {
@@ -382,6 +391,7 @@ export async function sendClaudeMessage(
 export function cancelClaudeProcess(conversationId: number): void {
   const proc = activeProcesses.get(conversationId)
   if (proc) {
+    cancelledConversations.add(conversationId)
     proc.kill('SIGTERM')
     activeProcesses.delete(conversationId)
   }

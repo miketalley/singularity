@@ -21,6 +21,7 @@ export interface ElectronAPI {
   deleteMessage: (messageId: number) => Promise<boolean>
   getStreamingState: (conversationId: number) => Promise<string | null>
   isProcessActive: (conversationId: number) => Promise<boolean>
+  cancelMessage: (conversationId: number) => Promise<void>
 
   // API key status
   getApiKeyStatus: () => Promise<boolean>

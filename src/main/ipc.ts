@@ -40,7 +40,8 @@ import {
   generateSessionId,
   isClaudeAvailable,
   getStreamingContent,
-  isProcessActive
+  isProcessActive,
+  cancelClaudeProcess
 } from './claude-cli'
 import { transcribeAudio, getWhisperStatus, downloadWhisperModel } from './whisper'
 import { log } from './logger'
@@ -159,16 +160,18 @@ export function registerIpcHandlers(): void {
     return isProcessActive(conversationId)
   })
 
+  ipcMain.handle('cancel-message', (_event, conversationId: number) => {
+    cancelClaudeProcess(conversationId)
+  })
+
   ipcMain.handle(
     'send-message',
     async (event, conversationId: number, content: string, model: string) => {
       log('ipc', 'send-message', { conversationId, model, contentLength: content.length })
 
       // Determine if this is the first message BEFORE saving user message.
-      // We check for any existing messages (not just assistant messages) because
-      // if a previous send failed after the CLI session was created, there won't
-      // be an assistant message but the session still exists on Claude's side.
-      // Using --session-id again would error with "Session ID is already in use".
+      // When true, we use --session-id to create a new Claude session;
+      // when false, we use --resume to continue the existing one.
       const existingMessages = getMessagesByConversation(conversationId)
       const isFirstMessage = existingMessages.length === 0
 
@@ -198,9 +201,14 @@ export function registerIpcHandlers(): void {
         throw new Error('Workspace not found for conversation')
       }
 
-      // Generate session_id if conversation doesn't have one (legacy conversations)
+      // Generate a fresh session_id when this is the first message or when
+      // the conversation has no session_id (legacy). Regenerating on first
+      // message is critical for retries: if the previous attempt created a
+      // session on Claude's side but failed before saving a response, the old
+      // session_id is "already in use" and cannot be passed with --session-id
+      // again. A fresh ID avoids this conflict.
       let sessionId = conv.session_id
-      if (!sessionId) {
+      if (!sessionId || isFirstMessage) {
         sessionId = generateSessionId()
         const db = getDatabase()
         db.prepare('UPDATE conversations SET session_id = ? WHERE id = ?').run(
@@ -264,8 +272,10 @@ export function registerIpcHandlers(): void {
           brainContext
         )
 
-        // Save the assistant response
-        addMessage(conversationId, 'assistant', responseText)
+        // Save the assistant response (skip if empty, e.g. cancelled before any output)
+        if (responseText) {
+          addMessage(conversationId, 'assistant', responseText)
+        }
 
         // Wait for title generation to finish if it hasn't already
         if (titlePromise) await titlePromise

@@ -70,13 +70,17 @@ When Stop or Add is pressed, the partial streaming response is saved to the data
 
 ### Wiring Changes
 
-1. **claude-cli.ts** — `cancelClaudeProcess()` already exists, no changes needed
-2. **preload/index.ts** — expose `cancelMessage(conversationId)` in `electronAPI`
-3. **ipc.ts** — add IPC handler for `'cancel-message'` that calls `cancelClaudeProcess`
-4. **ConversationView.tsx** — swap Send button based on `isStreaming` and input state, add Add/Queue click handlers
-5. **global.css** — button styles for Stop (red), Add (accent), Queue (secondary)
+1. **claude-cli.ts** — Added `cancelledConversations` Set so cancel resolves cleanly (not as error). `cancelClaudeProcess()` marks the conversation before killing, and the `close` handler checks the flag to resolve with partial content instead of rejecting.
+2. **preload/index.ts** + **index.d.ts** — Exposed `cancelMessage(conversationId)` in `electronAPI`
+3. **ipc.ts** — Added `cancel-message` IPC handler. Modified `send-message` to skip saving empty responses (from cancel with no partial content).
+4. **ConversationView.tsx** — Added `handleStop`, `handleAdd`, `handleQueue` callbacks. Button rendering swaps based on `isStreaming` and input state. Enter key maps to `handleAdd` during streaming. Placeholder text changes during streaming. Inline styles for Stop (red) and Queue (outline) buttons.
 
 ### Placeholder Text
 
 - Idle: "Type a message..."
 - Streaming: "Add to your thought..."
+
+### Keyboard Shortcuts
+
+- **Enter** during streaming: Add (cancel + send follow-up)
+- **Shift+Enter**: Newline (unchanged)
