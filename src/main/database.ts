@@ -116,7 +116,7 @@ export function getConversationsByWorkspace(workspaceId: number): unknown[] {
          (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id) as message_count,
          (SELECT CASE
            WHEN lm.role = 'assistant' AND (
-             TRIM(lm.content) LIKE '%?'
+             RTRIM(TRIM(lm.content), '*_\`') LIKE '%?'
              OR lm.content LIKE '%[QUESTION_BLOCK]%'
            ) THEN 1
            ELSE 0
@@ -124,7 +124,8 @@ export function getConversationsByWorkspace(workspaceId: number): unknown[] {
          FROM messages lm
          WHERE lm.conversation_id = c.id
          ORDER BY lm.id DESC
-         LIMIT 1) as awaiting_response
+         LIMIT 1) as awaiting_response,
+         (SELECT role FROM messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1) as last_message_role
        FROM conversations c
        WHERE c.workspace_id = ? AND c.deleted_at IS NULL
        ORDER BY c.updated_at DESC`
