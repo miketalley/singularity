@@ -305,6 +305,8 @@ function Sidebar({
     isDownloading: boolean
   }>({ modelDownloaded: false, modelPath: null, isDownloading: false })
   const [downloadProgress, setDownloadProgress] = useState<number | null>(null)
+  const [confirmRemoveWorkspaceId, setConfirmRemoveWorkspaceId] = useState<number | null>(null)
+  const [executionMode, setExecutionMode] = useState<string>('ask')
 
   // Load whisper status when settings panel opens
   useEffect(() => {
@@ -318,6 +320,11 @@ function Sidebar({
       }
     }
     loadWhisperStatus()
+
+    // Load execution mode preference
+    window.electronAPI.getSetting('execution_mode_preference', 'ask').then((val) => {
+      if (val) setExecutionMode(val)
+    })
 
     window.electronAPI.onWhisperDownloadProgress((data) => {
       setDownloadProgress(data.progress)
@@ -338,6 +345,12 @@ function Sidebar({
       console.error('Failed to download whisper model:', err)
       setDownloadProgress(null)
     }
+  }, [])
+
+  const handleExecutionModeChange = useCallback(async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const value = e.target.value
+    setExecutionMode(value)
+    await window.electronAPI.setSetting('execution_mode_preference', value)
   }, [])
 
   const loadData = useCallback(async () => {
@@ -402,18 +415,25 @@ function Sidebar({
   )
 
   const handleRemoveWorkspace = useCallback(
-    async (e: React.MouseEvent, workspaceId: number) => {
+    (e: React.MouseEvent, workspaceId: number) => {
       e.stopPropagation()
       setMenuOpenForWorkspace(null)
-      try {
-        await window.electronAPI.deleteWorkspace(workspaceId)
-        await loadData()
-      } catch (err) {
-        console.error('Failed to remove workspace:', err)
-      }
+      setConfirmRemoveWorkspaceId(workspaceId)
     },
-    [loadData]
+    []
   )
+
+  const handleConfirmRemoveWorkspace = useCallback(async () => {
+    if (confirmRemoveWorkspaceId === null) return
+    try {
+      await window.electronAPI.deleteWorkspace(confirmRemoveWorkspaceId)
+      await loadData()
+    } catch (err) {
+      console.error('Failed to remove workspace:', err)
+    } finally {
+      setConfirmRemoveWorkspaceId(null)
+    }
+  }, [confirmRemoveWorkspaceId, loadData])
 
   const toggleMenu = useCallback((e: React.MouseEvent, workspaceId: number) => {
     e.stopPropagation()
@@ -690,6 +710,27 @@ function Sidebar({
             <span style={styles.settingsLabel}>Default model</span>
             <ModelSelector value={defaultModel} onChange={onDefaultModelChange} />
           </div>
+          <div style={styles.settingsRow}>
+            <span style={styles.settingsLabel}>Execution mode</span>
+            <select
+              value={executionMode}
+              onChange={handleExecutionModeChange}
+              style={{
+                fontSize: '12px',
+                padding: '3px 6px',
+                backgroundColor: 'var(--bg-primary)',
+                color: 'var(--text-primary)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '4px',
+                outline: 'none',
+                cursor: 'pointer'
+              }}
+            >
+              <option value="ask">Ask each time</option>
+              <option value="subagent">Always Subagent-Driven</option>
+              <option value="parallel">Always Parallel Session</option>
+            </select>
+          </div>
           <div style={{ ...styles.settingsRow, flexDirection: 'column', alignItems: 'stretch' }}>
             <span style={styles.settingsLabel}>Voice transcription</span>
             {whisperStatus.modelDownloaded ? (
@@ -791,6 +832,98 @@ function Sidebar({
           >
             Mark Completed
           </button>
+        </div>
+      )}
+
+      {/* Remove workspace confirmation dialog */}
+      {confirmRemoveWorkspaceId !== null && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            zIndex: 200,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}
+          onClick={() => setConfirmRemoveWorkspaceId(null)}
+        >
+          <div
+            style={{
+              backgroundColor: 'var(--bg-tertiary)',
+              border: '1px solid var(--border-color)',
+              borderRadius: '8px',
+              padding: '20px',
+              width: '340px',
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                fontSize: '14px',
+                fontWeight: 600,
+                color: 'var(--text-bright)',
+                marginBottom: '8px'
+              }}
+            >
+              Remove Workspace
+            </div>
+            <div
+              style={{
+                fontSize: '13px',
+                color: 'var(--text-secondary)',
+                lineHeight: '1.5',
+                marginBottom: '20px'
+              }}
+            >
+              Are you sure? All conversations in this workspace will be permanently deleted.
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+              <button
+                style={{
+                  fontSize: '12px',
+                  color: 'var(--text-primary)',
+                  padding: '6px 14px',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '4px',
+                  backgroundColor: 'transparent'
+                }}
+                onClick={() => setConfirmRemoveWorkspaceId(null)}
+                onMouseEnter={(e) =>
+                  (e.currentTarget.style.backgroundColor = 'var(--bg-hover)')
+                }
+                onMouseLeave={(e) =>
+                  (e.currentTarget.style.backgroundColor = 'transparent')
+                }
+              >
+                Cancel
+              </button>
+              <button
+                style={{
+                  fontSize: '12px',
+                  color: '#fff',
+                  padding: '6px 14px',
+                  border: '1px solid #e06c75',
+                  borderRadius: '4px',
+                  backgroundColor: '#e06c75'
+                }}
+                onClick={handleConfirmRemoveWorkspace}
+                onMouseEnter={(e) =>
+                  (e.currentTarget.style.backgroundColor = '#c75a63')
+                }
+                onMouseLeave={(e) =>
+                  (e.currentTarget.style.backgroundColor = '#e06c75')
+                }
+              >
+                Remove
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
