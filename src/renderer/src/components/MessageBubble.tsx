@@ -749,6 +749,7 @@ function MessageBubble({
             }
             const { body, trailingQuestion } = extractTrailingQuestion(seg.text)
             const approachData = parseApproachBlocks(body)
+            const numberedOptions = !approachData ? parseNumberedOptions(body) : null
             return (
               <React.Fragment key={i}>
                 {approachData ? (
@@ -802,6 +803,59 @@ function MessageBubble({
                     {approachData.postamble && (
                       <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                         {normalizeMarkdown(approachData.postamble)}
+                      </Markdown>
+                    )}
+                  </>
+                ) : numberedOptions ? (
+                  <>
+                    {numberedOptions.preamble && (
+                      <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                        {normalizeMarkdown(numberedOptions.preamble)}
+                      </Markdown>
+                    )}
+                    {numberedOptions.options.map((opt) => (
+                      <div
+                        key={opt.number}
+                        style={styles.optionCard}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() =>
+                          onQuestionOptionClick?.(
+                            `${opt.number}. ${opt.label} — ${opt.description}`
+                          )
+                        }
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault()
+                            onQuestionOptionClick?.(
+                              `${opt.number}. ${opt.label} — ${opt.description}`
+                            )
+                          }
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor =
+                            'rgba(0, 120, 212, 0.12)'
+                          e.currentTarget.style.borderColor = 'var(--accent-color)'
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor =
+                            'rgba(255, 255, 255, 0.04)'
+                          e.currentTarget.style.borderColor =
+                            'rgba(255, 255, 255, 0.08)'
+                        }}
+                      >
+                        <span style={styles.optionNumber}>{opt.number}</span>
+                        <div style={styles.optionContent}>
+                          <div style={styles.optionLabel}>{opt.label}</div>
+                          <div style={styles.optionDescription}>
+                            {opt.description}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    {numberedOptions.postamble && (
+                      <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                        {normalizeMarkdown(numberedOptions.postamble)}
                       </Markdown>
                     )}
                   </>
