@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import MessageBubble from './MessageBubble'
+import { parseExecutionModeOptions } from './MessageBubble'
 import ModelSelector from './ModelSelector'
 import ThinkingIndicator from './ThinkingIndicator'
 import ToolActivityIndicator from './ToolActivityIndicator'
@@ -21,7 +22,7 @@ interface ConversationViewProps {
   draft?: string
   onDraftChange?: (conversationId: number, text: string) => void
   onLearnFromThis?: (content: string, sentiment: 'positive' | 'negative') => void
-  onReportProblem?: (sourceConversationId: number, description: string) => void
+  onReportProblem?: (sourceConversationId: number, description: string, screenshotPath?: string) => void
 }
 
 function writeString(view: DataView, offset: number, str: string): void {
@@ -227,20 +228,81 @@ const styles: Record<string, React.CSSProperties> = {
     maxHeight: '200px',
     overflowY: 'auto' as const
   },
-  reportButton: {
+  reportDropdownContainer: {
+    position: 'relative' as const,
     alignSelf: 'flex-end',
-    padding: '8px 12px',
-    backgroundColor: '#e8820c',
-    color: 'var(--text-bright)',
-    borderRadius: '4px',
-    fontWeight: 500,
-    fontSize: '13px',
-    border: 'none',
-    cursor: 'pointer',
+    display: 'flex'
+  },
+  reportButtonMain: {
     display: 'flex',
     alignItems: 'center',
     gap: '5px',
+    padding: '8px 12px',
+    backgroundColor: '#e8820c',
+    color: 'var(--text-bright)',
+    fontWeight: 500,
+    fontSize: '13px',
+    border: 'none',
+    borderRadius: '4px 0 0 4px',
+    cursor: 'pointer',
     whiteSpace: 'nowrap' as const
+  },
+  reportButtonCaret: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '8px 6px',
+    backgroundColor: '#e8820c',
+    color: 'var(--text-bright)',
+    border: 'none',
+    borderLeft: '1px solid rgba(255,255,255,0.3)',
+    borderRadius: '0 4px 4px 0',
+    cursor: 'pointer',
+    fontSize: '10px'
+  },
+  reportDropdown: {
+    position: 'absolute' as const,
+    bottom: '100%',
+    right: 0,
+    marginBottom: '4px',
+    backgroundColor: 'var(--bg-secondary)',
+    border: '1px solid var(--border-color)',
+    borderRadius: '6px',
+    boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+    zIndex: 100,
+    minWidth: '200px',
+    overflow: 'hidden'
+  },
+  reportDropdownItem: {
+    padding: '8px 12px',
+    fontSize: '13px',
+    color: 'var(--text-primary)',
+    cursor: 'pointer',
+    border: 'none',
+    backgroundColor: 'transparent',
+    width: '100%',
+    textAlign: 'left' as const,
+    display: 'block',
+    whiteSpace: 'nowrap' as const
+  },
+  screenshotThumbnailContainer: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    marginTop: '12px',
+    padding: '8px',
+    backgroundColor: 'var(--bg-primary)',
+    borderRadius: '4px',
+    border: '1px solid var(--border-color)'
+  },
+  screenshotThumbnail: {
+    width: '120px',
+    borderRadius: '4px',
+    border: '1px solid var(--border-color)'
+  },
+  screenshotLabel: {
+    fontSize: '12px',
+    color: 'var(--text-secondary)'
   },
   modalOverlay: {
     position: 'fixed' as const,
@@ -341,6 +403,9 @@ function ConversationView({
   const [expandedDetails, setExpandedDetails] = useState<Set<number>>(new Set())
   const [showReportModal, setShowReportModal] = useState(false)
   const [reportDescription, setReportDescription] = useState('')
+  const [showReportDropdown, setShowReportDropdown] = useState(false)
+  const [screenshotData, setScreenshotData] = useState<{ filePath: string; dataUrl: string } | null>(null)
+  const [toastMessage, setToastMessage] = useState<string | null>(null)
   const reportTextareaRef = useRef<HTMLTextAreaElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const messageQueueRef = useRef<string[]>([])
@@ -450,6 +515,29 @@ function ConversationView({
         try {
           const msgs = (await window.electronAPI.getMessages(conversationId)) as Message[]
           setMessages([...msgs, ...pendingMessagesRef.current])
+
+          // Auto-response: check if the latest assistant message contains
+          // execution mode options and the user has a preference set
+          const pref = await window.electronAPI.getSetting('execution_mode_preference', 'ask')
+          if (pref && pref !== 'ask') {
+            const lastAssistant = [...msgs].reverse().find((m) => m.role === 'assistant')
+            if (lastAssistant) {
+              const detected = parseExecutionModeOptions(lastAssistant.content)
+              if (detected) {
+                const keyword = pref === 'subagent' ? /subagent/i : /parallel/i
+                const matched = detected.options.find((opt) => keyword.test(opt.label))
+                if (matched) {
+                  const formatted = `${matched.number}. ${matched.label} — ${matched.description}`
+                  setToastMessage(`Auto-selected: ${matched.label} (from Settings)`)
+                  setTimeout(() => setToastMessage(null), 3000)
+                  // Small delay so the user sees the message before auto-response
+                  setTimeout(() => {
+                    sendDirectMessage(formatted)
+                  }, 500)
+                }
+              }
+            }
+          }
         } catch (err) {
           setError(`Failed to reload messages: ${err}`)
         }
@@ -459,7 +547,7 @@ function ConversationView({
     return () => {
       window.electronAPI.removeStreamListeners()
     }
-  }, [conversationId])
+  }, [conversationId, sendDirectMessage])
 
   // Auto-scroll on new messages or streaming content (only if user hasn't scrolled up)
   useEffect(() => {
@@ -773,8 +861,9 @@ function ConversationView({
     requestAnimationFrame(resizeTextarea)
   }, [resizeTextarea])
 
-  const openReportModal = useCallback(() => {
+  const openReportModal = useCallback((screenshot?: { filePath: string; dataUrl: string } | null) => {
     setReportDescription('')
+    setScreenshotData(screenshot ?? null)
     setShowReportModal(true)
     setTimeout(() => reportTextareaRef.current?.focus(), 50)
   }, [])
@@ -782,24 +871,52 @@ function ConversationView({
   const closeReportModal = useCallback(() => {
     setShowReportModal(false)
     setReportDescription('')
+    setScreenshotData(null)
   }, [])
 
   const handleSendReport = useCallback(() => {
     const trimmed = reportDescription.trim()
     if (!trimmed || !onReportProblem) return
-    onReportProblem(conversationId, trimmed)
+    onReportProblem(conversationId, trimmed, screenshotData?.filePath)
     closeReportModal()
-  }, [reportDescription, conversationId, onReportProblem, closeReportModal])
+  }, [reportDescription, conversationId, onReportProblem, closeReportModal, screenshotData])
 
-  // Escape key closes report modal
+  const handleScreenshotAndReport = useCallback(async () => {
+    setShowReportDropdown(false)
+    try {
+      const result = await (window as any).electronAPI.captureScreenshot()
+      openReportModal(result)
+    } catch (err) {
+      console.error('Failed to capture screenshot:', err)
+      openReportModal()
+    }
+  }, [openReportModal])
+
+  // Escape key closes report modal or dropdown
   useEffect(() => {
-    if (!showReportModal) return
+    if (!showReportModal && !showReportDropdown) return
     const handler = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') closeReportModal()
+      if (e.key === 'Escape') {
+        if (showReportDropdown) setShowReportDropdown(false)
+        else closeReportModal()
+      }
     }
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [showReportModal, closeReportModal])
+  }, [showReportModal, showReportDropdown, closeReportModal])
+
+  // Click outside closes dropdown
+  useEffect(() => {
+    if (!showReportDropdown) return
+    const handler = (e: MouseEvent): void => {
+      const target = e.target as HTMLElement
+      if (!target.closest('[data-report-dropdown]')) {
+        setShowReportDropdown(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showReportDropdown])
 
   return (
     <div style={styles.container}>
@@ -974,6 +1091,27 @@ function ConversationView({
           >
             ↓
           </button>
+        )}
+        {toastMessage && (
+          <div
+            style={{
+              position: 'absolute',
+              bottom: '16px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              padding: '8px 16px',
+              backgroundColor: 'rgba(0, 120, 212, 0.9)',
+              color: '#fff',
+              fontSize: '13px',
+              fontWeight: 500,
+              borderRadius: '6px',
+              boxShadow: '0 2px 8px rgba(0, 0, 0, 0.3)',
+              zIndex: 11,
+              whiteSpace: 'nowrap' as const
+            }}
+          >
+            {toastMessage}
+          </div>
         )}
       </div>
 
