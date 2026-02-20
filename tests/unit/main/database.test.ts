@@ -574,6 +574,29 @@ describe('getConversationsByWorkspace computed columns', () => {
     expect(convs[0].awaiting_response).toBe(1)
   })
 
+  it('returns last_message_role = null when conversation has no messages', () => {
+    createConversation(workspaceId, 'Empty', 'gpt-4')
+    const convs = getConversationsByWorkspace(workspaceId)
+    expect(convs[0].last_message_role).toBeNull()
+  })
+
+  it('returns last_message_role = "user" when last message is from user', () => {
+    const conv = createConversation(workspaceId, 'User Last', 'gpt-4')
+    addMessage(conv.id, 'user', 'hello')
+
+    const convs = getConversationsByWorkspace(workspaceId)
+    expect(convs[0].last_message_role).toBe('user')
+  })
+
+  it('returns last_message_role = "assistant" when last message is from assistant', () => {
+    const conv = createConversation(workspaceId, 'Asst Last', 'gpt-4')
+    addMessage(conv.id, 'user', 'hello')
+    addMessage(conv.id, 'assistant', 'Hi there!')
+
+    const convs = getConversationsByWorkspace(workspaceId)
+    expect(convs[0].last_message_role).toBe('assistant')
+  })
+
   it('orders conversations by updated_at DESC', () => {
     // Create conversations with known timestamps
     db.prepare(
