@@ -17,6 +17,7 @@ interface Conversation {
   message_count?: number
   needs_review?: number
   awaiting_response?: number
+  last_message_role?: string
 }
 
 interface SidebarProps {
@@ -684,7 +685,7 @@ function Sidebar({
                       onContextMenu={(e) => handleConvContextMenu(e, conv.id)}
                       title={conv.title}
                     >
-                      {isStreamingConv ? (
+                      {isStreamingConv || conv.last_message_role === 'user' ? (
                         <SpinnerIcon />
                       ) : conv.awaiting_response ? (
                         <AwaitingResponseIcon />
