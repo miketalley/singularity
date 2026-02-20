@@ -5,6 +5,7 @@ import WelcomeView from './components/WelcomeView'
 import ApiKeyMissing from './components/ApiKeyMissing'
 import BrainPanel from './components/BrainPanel'
 import StatusBar from './components/StatusBar'
+import { persistSessionState, restoreSessionState, persistDrafts } from './session-restore'
 
 interface ActiveConversation {
   id: number
@@ -115,6 +116,43 @@ function App(): React.JSX.Element {
       } catch {
         // Use default
       }
+      // Restore last session
+      try {
+        const session = await restoreSessionState()
+        if (session) {
+          const workspaces = (await window.electronAPI.getWorkspaces()) as Array<{
+            id: number
+            name: string
+            path: string
+          }>
+          const workspace = workspaces.find((w) => w.id === session.workspaceId)
+          if (workspace) {
+            const convs = (await window.electronAPI.getConversations(
+              session.workspaceId
+            )) as Array<{ id: number; workspace_id: number; title: string; model: string }>
+            const conv = convs.find((c) => c.id === session.conversationId)
+            if (conv) {
+              setActiveConversation({
+                id: conv.id,
+                workspaceId: conv.workspace_id,
+                title: conv.title,
+                model: conv.model,
+                workspacePath: workspace.path,
+                workspaceName: workspace.name
+              })
+            }
+          }
+          if (Object.keys(session.drafts).length > 0) {
+            const numericDrafts: Record<number, string> = {}
+            for (const [k, v] of Object.entries(session.drafts)) {
+              numericDrafts[parseInt(k, 10)] = v
+            }
+            setDrafts(numericDrafts)
+          }
+        }
+      } catch {
+        // Restore failed, continue with fresh state
+      }
     }
     init()
   }, [])
@@ -153,6 +191,7 @@ function App(): React.JSX.Element {
         workspacePath: conversation.workspacePath,
         workspaceName: conversation.workspaceName
       })
+      persistSessionState(conversation.workspace_id, conversation.id)
     },
     []
   )
@@ -177,6 +216,7 @@ function App(): React.JSX.Element {
           workspacePath,
           workspaceName
         })
+        persistSessionState(conv.workspace_id, conv.id)
         setRefreshTrigger((prev) => prev + 1)
       } catch (err) {
         console.error('Failed to create conversation:', err)
@@ -188,6 +228,7 @@ function App(): React.JSX.Element {
   const handleDeleteConversation = useCallback((conversationId: number) => {
     setActiveConversation((prev) => {
       if (prev && prev.id === conversationId) {
+        persistSessionState(prev.workspaceId, -1)
         return null
       }
       return prev
@@ -216,11 +257,14 @@ function App(): React.JSX.Element {
 
   const handleDraftChange = useCallback((convId: number, text: string) => {
     setDrafts((prev) => {
+      let next: Record<number, string>
       if (text) {
-        return { ...prev, [convId]: text }
+        next = { ...prev, [convId]: text }
+      } else {
+        next = { ...prev }
+        delete next[convId]
       }
-      const next = { ...prev }
-      delete next[convId]
+      persistDrafts(next)
       return next
     })
   }, [])
