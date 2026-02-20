@@ -4,6 +4,7 @@ import ConversationView from './components/ConversationView'
 import WelcomeView from './components/WelcomeView'
 import ApiKeyMissing from './components/ApiKeyMissing'
 import BrainPanel from './components/BrainPanel'
+import StatusBar from './components/StatusBar'
 
 interface ActiveConversation {
   id: number
@@ -372,6 +373,10 @@ function App(): React.JSX.Element {
           />
         </div>
       </div>
+      <StatusBar
+        workspacePath={activeConversation?.workspacePath ?? null}
+        currentModel={activeConversation?.model ?? null}
+      />
     </>
   )
 }

@@ -109,6 +109,17 @@ const electronAPI = {
   brainTokenThreshold: (): Promise<number> =>
     ipcRenderer.invoke('brain-token-threshold'),
 
+  // Usage data
+  getUsageData: (): Promise<{
+    usedPercent: number | null
+    resetAt: string | null
+    lastChecked: string | null
+  }> => ipcRenderer.invoke('get-usage-data'),
+
+  // Git branch
+  getGitBranch: (workspacePath: string): Promise<string | null> =>
+    ipcRenderer.invoke('get-git-branch', workspacePath),
+
   // Event listeners
   onStreamDelta: (
     callback: (data: { conversationId: number; text: string }) => void

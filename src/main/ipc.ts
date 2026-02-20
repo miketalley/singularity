@@ -44,6 +44,8 @@ import {
   cancelClaudeProcess
 } from './claude-cli'
 import { transcribeAudio, getWhisperStatus, downloadWhisperModel } from './whisper'
+import { fetchUsageData } from './usage'
+import { execFile } from 'child_process'
 import { log } from './logger'
 
 export function registerIpcHandlers(): void {
@@ -361,5 +363,23 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('brain-token-threshold', () => {
     return getTokenWarningThreshold()
+  })
+
+  // Usage data handler
+  ipcMain.handle('get-usage-data', async () => {
+    return fetchUsageData()
+  })
+
+  // Git branch handler
+  ipcMain.handle('get-git-branch', (_event, workspacePath: string) => {
+    return new Promise<string | null>((resolve) => {
+      execFile('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: workspacePath }, (err, stdout) => {
+        if (err) {
+          resolve(null)
+          return
+        }
+        resolve(stdout.trim() || null)
+      })
+    })
   })
 }

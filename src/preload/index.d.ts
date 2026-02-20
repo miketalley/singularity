@@ -76,6 +76,16 @@ export interface ElectronAPI {
   ) => Promise<Array<{ text: string; category: string }>>
   brainTokenThreshold: () => Promise<number>
 
+  // Usage data
+  getUsageData: () => Promise<{
+    usedPercent: number | null
+    resetAt: string | null
+    lastChecked: string | null
+  }>
+
+  // Git branch
+  getGitBranch: (workspacePath: string) => Promise<string | null>
+
   // Event listeners
   onStreamDelta: (
     callback: (data: { conversationId: number; text: string }) => void

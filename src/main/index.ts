@@ -6,6 +6,7 @@ import { initDatabase } from './database'
 import { initAnthropicClient } from './anthropic'
 import { registerIpcHandlers } from './ipc'
 import { initLogger, log, getLogPath } from './logger'
+import { startUsagePolling, stopUsagePolling } from './usage'
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -69,9 +70,36 @@ function createWindow(): void {
   }
 }
 
+// Set app name early so macOS menu bar shows "singularity"
+app.name = 'singularity'
+
 app.whenReady().then(() => {
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
+
+  // Set macOS application menu with correct app name
+  if (process.platform === 'darwin') {
+    const template: Electron.MenuItemConstructorOptions[] = [
+      {
+        label: app.name,
+        submenu: [
+          { role: 'about' },
+          { type: 'separator' },
+          { role: 'services' },
+          { type: 'separator' },
+          { role: 'hide' },
+          { role: 'hideOthers' },
+          { role: 'unhide' },
+          { type: 'separator' },
+          { role: 'quit' }
+        ]
+      },
+      { role: 'editMenu' },
+      { role: 'viewMenu' },
+      { role: 'windowMenu' }
+    ]
+    Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+  }
 
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.
@@ -95,6 +123,10 @@ app.whenReady().then(() => {
   registerIpcHandlers()
   log('app', 'IPC handlers registered')
 
+  // Start polling Claude API usage data every 5 minutes
+  startUsagePolling()
+  log('app', 'Usage polling started')
+
   createWindow()
 
   app.on('activate', function () {
@@ -103,6 +135,7 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
+  stopUsagePolling()
   if (process.platform !== 'darwin') {
     app.quit()
   }
