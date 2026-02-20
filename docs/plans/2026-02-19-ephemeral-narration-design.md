@@ -1,83 +1,80 @@
-# Ephemeral Narration Streaming
+# Ephemeral Narration Text Design
 
 ## Problem
 
-When Claude performs multi-step investigation (reading files, searching code), the narration text between tool calls ("Let me investigate...", "Now let me check...") gets concatenated into a single growing MessageBubble without line breaks. This produces an unreadable wall of text.
+When Claude writes narration text between tool calls (e.g., "Let me look at the code..."), it briefly flashes in a full MessageBubble, then gets cleared when tool activity starts — replaced by the three-dot ThinkingIndicator. This creates a jarring experience where useful context disappears.
 
-## Solution
+## Desired Behavior
 
-Treat narration text (text blocks that precede tool calls) as ephemeral activity indicators. Only the final text block (after all tool calls complete) persists as a permanent MessageBubble.
+1. Narration text persists as **ephemeral text** (inline, italic, muted — no bubble) until the next update arrives
+2. Tool activity indicator continues to show below the ephemeral text
+3. Ephemeral text is visually distinct from real messages so users know it's temporary
 
-## Architecture: Buffered Classification
+## Design
 
-We can't know if a text block is narration or final response when it starts — we don't know if a tool call will follow. So we **buffer text and classify retroactively**.
+### New State: `ephemeralText`
 
-### Event Flow
+Add one state variable to `ConversationView`:
 
-```
-Text block starts → buffer it
-  ↓
-Tool use arrives → flush buffer as `stream-narration`, clear buffer
-  ↓
-Another text block → buffer it
-  ↓
-Stream completes → flush buffer as `stream-delta` (this is the real answer)
+```ts
+const [ephemeralText, setEphemeralText] = useState('')
 ```
 
-### IPC Events
+### Updated Event Handler Flow
 
-| Event | Purpose | Renderer behavior |
-|---|---|---|
-| `stream-narration` | Ephemeral thinking text | Replaces previous narration indicator |
-| `stream-delta` | Final response text | Accumulates into MessageBubble |
-| `stream-tool-activity` | Tool status (unchanged) | Shows as ToolActivityIndicator |
-| `stream-complete` | Stream finished (unchanged) | Clears all ephemeral state, reloads from DB |
+```
+1. Streaming starts, no text yet     → ThinkingIndicator (dots)
+2. text_delta arrives                → clear ephemeralText, MessageBubble grows
+3. Tool activity arrives             → save streamingContent → ephemeralText,
+                                       clear streamingContent,
+                                       show EphemeralText + ToolActivityIndicator
+4. More text_delta arrives           → clear ephemeralText, MessageBubble grows
+5. Another tool call                 → repeat step 3
+6. Stream completes                  → clear everything
+```
 
-## Changes by File
+Handler changes in `ConversationView.tsx`:
 
-### `src/main/claude-cli.ts`
+- `onToolActivity`: before clearing `streamingContent`, save it to `ephemeralText`
+- `onStreamDelta`: clear `ephemeralText` (live text takes over)
+- `onStreamComplete`: clear `ephemeralText` along with other state
 
-- Add a `textBuffer` string that accumulates text from `text_delta` events
-- On `content_block_start` (text): reset buffer for new segment
-- On `content_block_delta` (text_delta): append to buffer (no IPC yet)
-- On tool_use detection (in `assistant` event handler): flush buffer as `stream-narration`, clear buffer
-- On stream complete / result: flush buffer as `stream-delta`
-- `fullResponse` still accumulates everything for DB storage (unchanged)
+### Updated Render Priority
 
-### `src/preload/index.ts` + `src/preload/index.d.ts`
+```
+if streamingContent    → MessageBubble (live text being written)
+else if ephemeralText  → EphemeralText + ToolActivityIndicator (if active)
+else if toolActivity   → ThinkingIndicator + ToolActivityIndicator
+else                   → ThinkingIndicator (dots only)
+```
 
-- Add `onStreamNarration` listener
-- Add cleanup in `removeStreamListeners`
+### New Component: `EphemeralText`
 
-### `src/renderer/src/components/ConversationView.tsx`
+- No bubble wrapper — freestanding text like a status line
+- Italic, muted color (`var(--text-secondary)`), reduced opacity
+- Same left-alignment/padding as ThinkingIndicator
+- Renders content as plain text
 
-- Add `narrationContent` state (string)
-- Register `onStreamNarration` listener — sets `narrationContent` (replaces, not appends)
-- Update rendering priority during streaming:
-  1. `streamingContent` non-empty → MessageBubble (final response)
-  2. `narrationContent` non-empty → NarrationIndicator (activity-style)
-  3. `toolActivity` non-empty → ThinkingIndicator + ToolActivityIndicator
-  4. Else → ThinkingIndicator (dots)
-- On `stream-complete`: clear `narrationContent`
+### Styling
 
-### `src/renderer/src/components/NarrationIndicator.tsx` (new)
+```css
+{
+  padding: '4px 16px',
+  fontStyle: 'italic',
+  color: 'var(--text-secondary)',
+  opacity: 0.7,
+  fontSize: '13px',
+  lineHeight: '1.5'
+}
+```
 
-- Similar to ToolActivityIndicator but for narration text
-- Compact, monospace, dimmed styling
-- Truncates to ~200 chars with ellipsis
-- Shows elapsed time
+### Edge Cases
 
-## Edge Cases
+- **No narration before first tool call**: `ephemeralText` stays empty → ThinkingIndicator shows as before
+- **Multiple tool calls without text in between**: `ephemeralText` retains last narration, tool activity updates
+- **Stream completes**: all ephemeral state cleared
 
-1. **No tool calls** — buffer accumulates, flushed as `stream-delta` on complete. Behaves like today.
-2. **Multiple consecutive text blocks** — accumulate in buffer until a tool use or complete event.
-3. **Very long narration** — truncated in display (ephemeral anyway).
-4. **Stream error/abort** — buffer is discarded with all other ephemeral state.
+## Files Changed
 
-## What Stays the Same
-
-- `stream-tool-activity` event and ToolActivityIndicator component
-- `stream-complete` event
-- DB storage (fullResponse from result event)
-- MessageBubble component
-- ThinkingIndicator component
+1. `src/renderer/src/components/ConversationView.tsx` — add `ephemeralText` state, update handlers + render
+2. `src/renderer/src/components/EphemeralText.tsx` — new component (inline italic/muted text)
