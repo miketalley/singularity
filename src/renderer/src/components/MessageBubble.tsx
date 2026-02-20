@@ -853,6 +853,50 @@ function MessageBubble({
                         </div>
                       </div>
                     ))}
+                    <div style={styles.customResponseRow}>
+                      <input
+                        style={styles.customResponseInput}
+                        type="text"
+                        placeholder="Other..."
+                        value={customResponse}
+                        onChange={(e) => setCustomResponse(e.target.value)}
+                        onFocus={(e) => {
+                          e.currentTarget.style.borderColor = 'var(--accent-color)'
+                        }}
+                        onBlur={(e) => {
+                          e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.1)'
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && customResponse.trim()) {
+                            onQuestionOptionClick?.(customResponse.trim())
+                            setCustomResponse('')
+                          }
+                        }}
+                      />
+                      <button
+                        style={{
+                          ...styles.customResponseSend,
+                          ...(customResponse.trim() ? {} : { opacity: 0.4, cursor: 'default' })
+                        }}
+                        disabled={!customResponse.trim()}
+                        onClick={() => {
+                          if (customResponse.trim()) {
+                            onQuestionOptionClick?.(customResponse.trim())
+                            setCustomResponse('')
+                          }
+                        }}
+                        onMouseEnter={(e) => {
+                          if (customResponse.trim()) {
+                            e.currentTarget.style.backgroundColor = 'var(--accent-hover)'
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'var(--accent-color)'
+                        }}
+                      >
+                        Send
+                      </button>
+                    </div>
                     {numberedOptions.postamble && (
                       <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                         {normalizeMarkdown(numberedOptions.postamble)}
